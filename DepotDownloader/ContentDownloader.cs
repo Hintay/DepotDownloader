@@ -746,19 +746,25 @@ namespace DepotDownloader
 
             if (Config.UseManifestFile)
             {
-                lastManifestId = depot.ManifestId;
-                oldManifest = DepotManifest.LoadFromFile(Config.ManifestFile);
-                if (oldManifest.FilenamesEncrypted)
+                newManifest = DepotManifest.LoadFromFile(Config.ManifestFile);
+
+                if (newManifest == null)
                 {
-                    if (!oldManifest.DecryptFilenames(depot.DepotKey))
-                    {
-                        Console.WriteLine("Failed to decrypt filenames in manifest file.");
-                        return null;
-                    }
+                    Console.WriteLine("Unable to load manifest file {0} for depot {1}", Config.ManifestFile, depot.DepotId);
+                    cts.Cancel();
                 }
             }
+            else if (Config.UseManifestDirectory)
+            {
+                newManifest = Util.LoadManifestFromFile(Config.ManifestDirectory, depot.DepotId, depot.ManifestId, true);
 
-            if (lastManifestId == depot.ManifestId && oldManifest != null)
+                if (newManifest == null)
+                {
+                    Console.WriteLine("Unable to load manifest {0} for depot {1} from directory {2}", depot.ManifestId, depot.DepotId, Config.ManifestDirectory);
+                    cts.Cancel();
+                }
+            }
+            else if (lastManifestId == depot.ManifestId && oldManifest != null)
             {
                 newManifest = oldManifest;
                 Console.WriteLine("Already have manifest {0} for depot {1}.", depot.ManifestId, depot.DepotId);
@@ -885,6 +891,17 @@ namespace DepotDownloader
                     cts.Token.ThrowIfCancellationRequested();
 
                     Util.SaveManifestToFile(configDir, newManifest);
+                }
+            }
+
+            cts.Token.ThrowIfCancellationRequested();
+
+            if (newManifest.FilenamesEncrypted)
+            {
+                if (!newManifest.DecryptFilenames(depot.DepotKey))
+                {
+                    Console.WriteLine("Failed to decrypt filenames in manifest {0} for depot {1}.", depot.ManifestId, depot.DepotId);
+                    return null;
                 }
             }
 

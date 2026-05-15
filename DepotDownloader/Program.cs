@@ -190,6 +190,26 @@ namespace DepotDownloader
             ContentDownloader.Config.LoginID = HasParameter(args, "-loginid") ? GetParameter<uint>(args, "-loginid") : null;
             ContentDownloader.Config.UseManifestFile = HasParameter(args, "-manifestfile");
             ContentDownloader.Config.ManifestFile = GetParameter<string>(args, "-manifestfile");
+            ContentDownloader.Config.UseManifestDirectory = HasParameter(args, "-manifestdir");
+            ContentDownloader.Config.ManifestDirectory = GetParameter<string>(args, "-manifestdir");
+
+            if (ContentDownloader.Config.UseManifestFile && string.IsNullOrWhiteSpace(ContentDownloader.Config.ManifestFile))
+            {
+                Console.WriteLine("Error: -manifestfile requires a file path.");
+                return 1;
+            }
+
+            if (ContentDownloader.Config.UseManifestDirectory && string.IsNullOrWhiteSpace(ContentDownloader.Config.ManifestDirectory))
+            {
+                Console.WriteLine("Error: -manifestdir requires a directory path.");
+                return 1;
+            }
+
+            if (ContentDownloader.Config.UseManifestFile && ContentDownloader.Config.UseManifestDirectory)
+            {
+                Console.WriteLine("Error: -manifestfile and -manifestdir can not be used together.");
+                return 1;
+            }
 
             #endregion
 
@@ -568,6 +588,7 @@ namespace DepotDownloader
             Console.WriteLine("  -V or --version          - print version and runtime.");
             Console.WriteLine("  -depotkeys <file>        - a list of depot keys to use ('depotID;hexKey' per line).");
             Console.WriteLine("  -manifestfile <file>     - Use Specified Manifest file from Steam.");
+            Console.WriteLine("  -manifestdir <dir>       - Use Steam manifest files from a directory by depot and manifest id.");
             Console.WriteLine("  -apptoken <#>            - Use Specified App Access Token.");
             Console.WriteLine("  -packagetoken <#>        - Use Specified Package Access Token.");
         }
