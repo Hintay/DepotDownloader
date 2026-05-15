@@ -64,7 +64,7 @@ namespace DepotDownloader
 
             var clientConfiguration = SteamConfiguration.Create(config =>
                 config
-                    .WithHttpClientFactory(purpose => HttpClientFactory.CreateHttpClient())
+                    .WithHttpClientFactory(static purpose => HttpClientFactory.CreateHttpClient())
             );
 
             this.steamClient = new SteamClient(clientConfiguration);

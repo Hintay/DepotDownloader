@@ -218,6 +218,8 @@ namespace DepotDownloader
             ContentDownloader.Config.ManifestFile = GetParameter<string>(args, "-manifestfile");
             ContentDownloader.Config.UseManifestDirectory = HasParameter(args, "-manifestdir");
             ContentDownloader.Config.ManifestDirectory = GetParameter<string>(args, "-manifestdir");
+            ContentDownloader.Config.GenerateAppManifest = HasParameter(args, "-appmanifest");
+            ContentDownloader.Config.AppManifestFile = GetParameter<string>(args, "-appmanifestfile");
 
             if (ContentDownloader.Config.UseManifestFile && string.IsNullOrWhiteSpace(ContentDownloader.Config.ManifestFile))
             {
@@ -631,6 +633,8 @@ namespace DepotDownloader
             Console.WriteLine("  -lua <file>              - a Lua file to load depot keys and manifest ids from.");
             Console.WriteLine("  -manifestfile <file>     - Use Specified Manifest file from Steam.");
             Console.WriteLine("  -manifestdir <dir>       - Use Steam manifest files from a directory by depot and manifest id.");
+            Console.WriteLine("  -appmanifest             - Generate a minimal Steam appmanifest ACF metadata file.");
+            Console.WriteLine("  -appmanifestfile <file>  - Write generated appmanifest ACF to a specific file.");
             Console.WriteLine("  -apptoken <#>            - Use Specified App Access Token.");
             Console.WriteLine("  -packagetoken <#>        - Use Specified Package Access Token.");
         }

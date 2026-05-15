@@ -311,6 +311,48 @@ namespace DepotDownloader
             return info["name"].AsString();
         }
 
+        static string GetAppInstallDir(uint appId)
+        {
+            var config = GetSteam3AppSection(appId, EAppInfoSection.Config);
+            if (config != null)
+            {
+                var installDir = config["installdir"].AsString();
+                if (!string.IsNullOrWhiteSpace(installDir))
+                {
+                    return installDir;
+                }
+            }
+
+            var appName = GetAppName(appId);
+            return string.IsNullOrWhiteSpace(appName) ? appId.ToString() : appName;
+        }
+
+        static void WriteAppManifest(uint appId, string branch, string language, IReadOnlyCollection<DepotDownloadInfo> depots, string configPath)
+        {
+            if (depots.Count == 0)
+            {
+                Console.WriteLine("No depots resolved; skipping appmanifest generation.");
+                return;
+            }
+
+            var manifestPath = Config.AppManifestFile;
+            if (string.IsNullOrWhiteSpace(manifestPath))
+            {
+                manifestPath = Path.Combine(configPath, CONFIG_DIR, $"appmanifest_{appId}.acf");
+            }
+
+            var manifest = new SteamAppManifest(
+                appId,
+                GetAppName(appId),
+                GetAppInstallDir(appId),
+                GetSteam3AppBuildNumber(appId, branch),
+                language ?? "english",
+                depots.Select(depot => new SteamAppManifestDepot(depot.DepotId, depot.ManifestId)).ToList());
+
+            AppManifestWriter.WriteToFile(manifestPath, manifest);
+            Console.WriteLine("Generated appmanifest metadata file: {0}", manifestPath);
+        }
+
         public static bool InitializeSteam3(string username, string password)
         {
             string loginToken = null;
@@ -596,6 +638,11 @@ namespace DepotDownloader
             try
             {
                 await DownloadSteam3Async(infos).ConfigureAwait(false);
+
+                if (Config.GenerateAppManifest)
+                {
+                    WriteAppManifest(appId, branch, language, infos, configPath);
+                }
             }
             catch (OperationCanceledException)
             {
