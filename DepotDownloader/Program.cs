@@ -166,6 +166,32 @@ namespace DepotDownloader
                 }
             }
 
+            ContentDownloader.Config.UseLuaFile = HasParameter(args, "-lua");
+            ContentDownloader.Config.LuaFile = GetParameter<string>(args, "-lua");
+            ContentDownloader.Config.LuaManifestIds = [];
+
+            if (ContentDownloader.Config.UseLuaFile)
+            {
+                if (string.IsNullOrWhiteSpace(ContentDownloader.Config.LuaFile))
+                {
+                    Console.WriteLine("Error: -lua requires a file path.");
+                    return 1;
+                }
+
+                try
+                {
+                    var lua = File.ReadAllText(ContentDownloader.Config.LuaFile);
+                    var luaDepotData = DepotKeyStore.AddFromLua(lua);
+                    ContentDownloader.Config.LuaManifestIds = luaDepotData.ManifestIds;
+
+                    Console.WriteLine("Using Lua file: '{0}'.", ContentDownloader.Config.LuaFile);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("Warning: Unable to load Lua file: {0}", ex.ToString());
+                }
+            }
+
             ContentDownloader.Config.InstallDirectory = GetParameter<string>(args, "-dir");
 
             ContentDownloader.Config.VerifyAll = HasParameter(args, "-verify-all") || HasParameter(args, "-verify_all") || HasParameter(args, "-validate");
@@ -355,6 +381,21 @@ namespace DepotDownloader
 
                     var zippedDepotManifest = depotIdList.Zip(manifestIdList, (depotId, manifestId) => (depotId, manifestId));
                     depotManifestIds.AddRange(zippedDepotManifest);
+                }
+                else if (depotIdList.Count > 0)
+                {
+                    depotManifestIds.AddRange(depotIdList.Select(depotId =>
+                    {
+                        var manifestId = ContentDownloader.Config.LuaManifestIds != null && ContentDownloader.Config.LuaManifestIds.TryGetValue(depotId, out var luaManifestId)
+                            ? luaManifestId
+                            : ContentDownloader.INVALID_MANIFEST_ID;
+
+                        return (depotId, manifestId);
+                    }));
+                }
+                else if (ContentDownloader.Config.LuaManifestIds != null && ContentDownloader.Config.LuaManifestIds.Count > 0)
+                {
+                    depotManifestIds.AddRange(ContentDownloader.Config.LuaManifestIds.Select(x => (x.Key, x.Value)));
                 }
                 else
                 {
@@ -587,6 +628,7 @@ namespace DepotDownloader
             Console.WriteLine("  -debug                   - enable verbose debug logging.");
             Console.WriteLine("  -V or --version          - print version and runtime.");
             Console.WriteLine("  -depotkeys <file>        - a list of depot keys to use ('depotID;hexKey' per line).");
+            Console.WriteLine("  -lua <file>              - a Lua file to load depot keys and manifest ids from.");
             Console.WriteLine("  -manifestfile <file>     - Use Specified Manifest file from Steam.");
             Console.WriteLine("  -manifestdir <dir>       - Use Steam manifest files from a directory by depot and manifest id.");
             Console.WriteLine("  -apptoken <#>            - Use Specified App Access Token.");

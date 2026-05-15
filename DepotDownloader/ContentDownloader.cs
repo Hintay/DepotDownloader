@@ -5,11 +5,13 @@ using System;
 using System.Buffers;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
+using Spectre.Console;
 using SteamKit2;
 using SteamKit2.CDN;
 
@@ -659,6 +661,128 @@ namespace DepotDownloader
             public ulong completeDownloadSize;
             public ulong totalBytesCompressed;
             public ulong totalBytesUncompressed;
+            public ulong totalDownloadSize;
+            public DateTime downloadStartTime;
+            public uint currentDepotId;
+            public int currentDepotCompletedChunks;
+            public int currentDepotTotalChunks;
+            public ulong diskBytesWritten;
+            public long diskWriteTicks;
+            public ProgressTask progressTask;
+
+            public void Begin(ulong totalSize, bool useInteractiveProgress)
+            {
+                totalDownloadSize = totalSize;
+                downloadStartTime = DateTime.UtcNow;
+
+                if (!useInteractiveProgress)
+                {
+                    Ansi.Progress(0, totalSize);
+                }
+            }
+
+            public void SetProgressTask(ProgressTask task)
+            {
+                progressTask = task;
+            }
+
+            public void SetCurrentDepot(uint depotId, int completedChunks = 0, int totalChunks = 0)
+            {
+                lock (this)
+                {
+                    currentDepotId = depotId;
+                    currentDepotCompletedChunks = completedChunks;
+                    currentDepotTotalChunks = totalChunks;
+                    UpdateProgressDisplay();
+                }
+            }
+
+            public void SetCurrentDepotChunks(int completedChunks, int totalChunks)
+            {
+                lock (this)
+                {
+                    currentDepotCompletedChunks = completedChunks;
+                    currentDepotTotalChunks = totalChunks;
+                    UpdateProgressDisplay();
+                }
+            }
+
+            public void AddCompletedBytes(ulong bytes)
+            {
+                lock (this)
+                {
+                    if (completeDownloadSize >= bytes)
+                    {
+                        completeDownloadSize -= bytes;
+                    }
+                    else
+                    {
+                        completeDownloadSize = 0;
+                    }
+
+                    UpdateProgressDisplay();
+                }
+            }
+
+            public void AddCompletedChunk(ulong bytes, int completedChunks, int totalChunks, ulong diskBytes, TimeSpan diskElapsed)
+            {
+                lock (this)
+                {
+                    currentDepotCompletedChunks = completedChunks;
+                    currentDepotTotalChunks = totalChunks;
+                    diskBytesWritten += diskBytes;
+                    diskWriteTicks += diskElapsed.Ticks;
+
+                    if (completeDownloadSize >= bytes)
+                    {
+                        completeDownloadSize -= bytes;
+                    }
+                    else
+                    {
+                        completeDownloadSize = 0;
+                    }
+
+                    UpdateProgressDisplay();
+                }
+            }
+
+            public void Finish()
+            {
+                lock (this)
+                {
+                    progressTask?.Increment(progressTask.MaxValue - progressTask.Value);
+                    Ansi.Progress(totalDownloadSize, totalDownloadSize);
+                }
+            }
+
+            private void UpdateProgressDisplay()
+            {
+                if (totalDownloadSize == 0)
+                {
+                    return;
+                }
+
+                var downloaded = totalDownloadSize - completeDownloadSize;
+                var now = DateTime.UtcNow;
+                var elapsed = now - downloadStartTime;
+                var bytesPerSecond = elapsed.TotalSeconds > 0 ? downloaded / elapsed.TotalSeconds : 0;
+                var diskElapsed = TimeSpan.FromTicks(diskWriteTicks);
+                var diskBytesPerSecond = diskElapsed.TotalSeconds > 0 ? diskBytesWritten / diskElapsed.TotalSeconds : 0;
+                var eta = bytesPerSecond > 0 ? TimeSpan.FromSeconds(completeDownloadSize / bytesPerSecond) : (TimeSpan?)null;
+
+                if (progressTask != null)
+                {
+                    var increment = downloaded - progressTask.Value;
+                    if (increment > 0)
+                    {
+                        progressTask.Increment(increment);
+                    }
+
+                    progressTask.Description = $"Depot {currentDepotId} | C {currentDepotCompletedChunks}/{currentDepotTotalChunks} | N {Ansi.FormatBytes(bytesPerSecond)}/s | D {Ansi.FormatBytes(diskBytesPerSecond)}/s | ETA {Ansi.FormatEta(eta)}";
+                }
+
+                Ansi.Progress(downloaded, totalDownloadSize);
+            }
         }
 
         private class DepotDownloadCounter
@@ -667,6 +791,8 @@ namespace DepotDownloader
             public ulong sizeDownloaded;
             public ulong depotBytesCompressed;
             public ulong depotBytesUncompressed;
+            public int totalChunks;
+            public int completedChunks;
         }
 
         private static async Task DownloadSteam3Async(List<DepotDownloadInfo> depots)
@@ -709,12 +835,49 @@ namespace DepotDownloader
                 }
             }
 
-            foreach (var depotFileData in depotsToDownload)
-            {
-                await DownloadSteam3AsyncDepotFiles(cts, downloadCounter, depotFileData, allFileNamesAllDepots);
-            }
+            var useInteractiveProgress = Ansi.CanUseInteractiveProgress && downloadCounter.completeDownloadSize > 0;
+            var totalDownloadSize = downloadCounter.completeDownloadSize;
 
-            Ansi.Progress(Ansi.ProgressState.Hidden);
+            try
+            {
+                if (useInteractiveProgress)
+                {
+                    await AnsiConsole.Progress()
+                        .AutoClear(false)
+                        .Columns(
+                            new TaskDescriptionColumn(),
+                            new ProgressBarColumn(),
+                            new PercentageColumn(),
+                            new SpinnerColumn())
+                        .StartAsync(async ctx =>
+                        {
+                            downloadCounter.Begin(totalDownloadSize, true);
+                            downloadCounter.SetProgressTask(ctx.AddTask("Downloading", maxValue: totalDownloadSize));
+
+                            foreach (var depotFileData in depotsToDownload)
+                            {
+                                await DownloadSteam3AsyncDepotFiles(cts, downloadCounter, depotFileData, allFileNamesAllDepots);
+                            }
+
+                            downloadCounter.Finish();
+                        });
+                }
+                else
+                {
+                    downloadCounter.Begin(totalDownloadSize, false);
+
+                    foreach (var depotFileData in depotsToDownload)
+                    {
+                        await DownloadSteam3AsyncDepotFiles(cts, downloadCounter, depotFileData, allFileNamesAllDepots);
+                    }
+
+                    downloadCounter.Finish();
+                }
+            }
+            finally
+            {
+                Ansi.Progress(Ansi.ProgressState.Hidden);
+            }
 
             Console.WriteLine("Total downloaded: {0} bytes ({1} bytes uncompressed) from {2} depots",
                 downloadCounter.totalBytesCompressed, downloadCounter.totalBytesUncompressed, depots.Count);
@@ -961,6 +1124,7 @@ namespace DepotDownloader
             var depotCounter = depotFilesData.depotCounter;
 
             Console.WriteLine("Downloading depot {0}", depot.DepotId);
+            downloadCounter.SetCurrentDepot(depot.DepotId);
 
             var files = depotFilesData.filteredFiles.Where(f => !f.Flags.HasFlag(EDepotFileFlag.Directory)).ToArray();
             var networkChunkQueue = new ConcurrentQueue<(FileStreamData fileStreamData, DepotManifest.FileData fileData, DepotManifest.ChunkData chunk)>();
@@ -976,6 +1140,8 @@ namespace DepotDownloader
                 await Task.Yield();
                 DownloadSteam3AsyncDepotFile(cts, downloadCounter, depotFilesData, file, networkChunkQueue);
             });
+
+            downloadCounter.SetCurrentDepotChunks(depotCounter.completedChunks, depotCounter.totalChunks);
 
             await Parallel.ForEachAsync(networkChunkQueue, parallelOptions, async (q, cancellationToken) =>
             {
@@ -1182,10 +1348,7 @@ namespace DepotDownloader
                         Console.WriteLine("{0,6:#00.00}% {1}", (depotDownloadCounter.sizeDownloaded / (float)depotDownloadCounter.completeDownloadSize) * 100.0f, fileFinalPath);
                     }
 
-                    lock (downloadCounter)
-                    {
-                        downloadCounter.completeDownloadSize -= file.TotalSize;
-                    }
+                    downloadCounter.AddCompletedBytes(file.TotalSize);
 
                     return;
                 }
@@ -1196,10 +1359,7 @@ namespace DepotDownloader
                     depotDownloadCounter.sizeDownloaded += sizeOnDisk;
                 }
 
-                lock (downloadCounter)
-                {
-                    downloadCounter.completeDownloadSize -= sizeOnDisk;
-                }
+                downloadCounter.AddCompletedBytes(sizeOnDisk);
             }
 
             var fileIsExecutable = file.Flags.HasFlag(EDepotFileFlag.Executable);
@@ -1218,6 +1378,11 @@ namespace DepotDownloader
                 fileLock = new SemaphoreSlim(1),
                 chunksToDownload = neededChunks.Count
             };
+
+            lock (depotDownloadCounter)
+            {
+                depotDownloadCounter.totalChunks += neededChunks.Count;
+            }
 
             foreach (var chunk in neededChunks)
             {
@@ -1242,6 +1407,7 @@ namespace DepotDownloader
 
             var written = 0;
             var chunkBuffer = ArrayPool<byte>.Shared.Rent((int)chunk.UncompressedLength);
+            var diskStopwatch = new Stopwatch();
 
             try
             {
@@ -1335,8 +1501,10 @@ namespace DepotDownloader
                         fileStreamData.fileStream = File.Open(fileFinalPath, FileMode.Open);
                     }
 
+                    diskStopwatch.Start();
                     fileStreamData.fileStream.Seek((long)chunk.Offset, SeekOrigin.Begin);
                     await fileStreamData.fileStream.WriteAsync(chunkBuffer.AsMemory(0, written), cts.Token);
+                    diskStopwatch.Stop();
                 }
                 finally
                 {
@@ -1356,21 +1524,25 @@ namespace DepotDownloader
             }
 
             ulong sizeDownloaded = 0;
+            int completedChunks;
+            int totalChunks;
             lock (depotDownloadCounter)
             {
                 sizeDownloaded = depotDownloadCounter.sizeDownloaded + (ulong)written;
                 depotDownloadCounter.sizeDownloaded = sizeDownloaded;
                 depotDownloadCounter.depotBytesCompressed += chunk.CompressedLength;
                 depotDownloadCounter.depotBytesUncompressed += chunk.UncompressedLength;
+                completedChunks = ++depotDownloadCounter.completedChunks;
+                totalChunks = depotDownloadCounter.totalChunks;
             }
 
             lock (downloadCounter)
             {
                 downloadCounter.totalBytesCompressed += chunk.CompressedLength;
                 downloadCounter.totalBytesUncompressed += chunk.UncompressedLength;
-
-                Ansi.Progress(downloadCounter.totalBytesUncompressed, downloadCounter.completeDownloadSize);
             }
+
+            downloadCounter.AddCompletedChunk(chunk.UncompressedLength, completedChunks, totalChunks, (ulong)written, diskStopwatch.Elapsed);
 
             if (remainingChunks == 0)
             {

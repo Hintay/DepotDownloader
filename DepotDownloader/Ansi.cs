@@ -24,6 +24,8 @@ static class Ansi
 
     private static bool useProgress;
 
+    public static bool CanUseInteractiveProgress => !Console.IsInputRedirected && !Console.IsOutputRedirected;
+
     public static void Init()
     {
         if (Console.IsInputRedirected || Console.IsOutputRedirected)
@@ -43,8 +45,44 @@ static class Ansi
 
     public static void Progress(ulong downloaded, ulong total)
     {
+        if (total == 0)
+        {
+            Progress(ProgressState.Default, 0);
+            return;
+        }
+
         var progress = (byte)MathF.Round(downloaded / (float)total * 100.0f);
         Progress(ProgressState.Default, progress);
+    }
+
+    public static string FormatBytes(double bytes)
+    {
+        string[] units = ["B", "KiB", "MiB", "GiB", "TiB"];
+        var value = bytes;
+        var unit = 0;
+
+        while (value >= 1024 && unit < units.Length - 1)
+        {
+            value /= 1024;
+            unit++;
+        }
+
+        return $"{value:0.##} {units[unit]}";
+    }
+
+    public static string FormatEta(TimeSpan? eta)
+    {
+        if (eta == null)
+        {
+            return "--:--";
+        }
+
+        if (eta.Value.TotalHours >= 1)
+        {
+            return $"{(int)eta.Value.TotalHours:00}:{eta.Value.Minutes:00}:{eta.Value.Seconds:00}";
+        }
+
+        return $"{eta.Value.Minutes:00}:{eta.Value.Seconds:00}";
     }
 
     public static void Progress(ProgressState state, byte progress = 0)

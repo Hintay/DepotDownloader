@@ -37,5 +37,8 @@ namespace DepotDownloader
         public string ManifestFile { get; set; }
         public bool UseManifestDirectory { get; set; }
         public string ManifestDirectory { get; set; }
+        public bool UseLuaFile { get; set; }
+        public string LuaFile { get; set; }
+        public Dictionary<uint, ulong> LuaManifestIds { get; set; }
     }
 }
