@@ -129,26 +129,45 @@ namespace DepotDownloader
 
             if (File.Exists(filename))
             {
-                byte[] expectedChecksum;
+                var checksumFilename = filename + ".sha";
 
-                try
+                if (!File.Exists(checksumFilename))
                 {
-                    expectedChecksum = File.ReadAllBytes(filename + ".sha");
-                }
-                catch (IOException)
-                {
-                    expectedChecksum = null;
-                }
+                    if (badHashWarning)
+                    {
+                        Console.WriteLine("Manifest {0} on disk is missing checksum file {1}. Loading without checksum verification.", manifestId, checksumFilename);
+                    }
 
-                var currentChecksum = FileSHAHash(filename);
-
-                if (expectedChecksum != null && expectedChecksum.SequenceEqual(currentChecksum))
-                {
                     return DepotManifest.LoadFromFile(filename);
                 }
-                else if (badHashWarning)
+                else
                 {
-                    Console.WriteLine("Manifest {0} on disk did not match the expected checksum.", manifestId);
+                    byte[] expectedChecksum;
+
+                    try
+                    {
+                        expectedChecksum = File.ReadAllBytes(checksumFilename);
+                    }
+                    catch (IOException ex)
+                    {
+                        if (badHashWarning)
+                        {
+                            Console.WriteLine("Unable to read checksum file {0}: {1}", checksumFilename, ex.Message);
+                        }
+
+                        expectedChecksum = null;
+                    }
+
+                    var currentChecksum = FileSHAHash(filename);
+
+                    if (expectedChecksum != null && expectedChecksum.SequenceEqual(currentChecksum))
+                    {
+                        return DepotManifest.LoadFromFile(filename);
+                    }
+                    else if (expectedChecksum != null && badHashWarning)
+                    {
+                        Console.WriteLine("Manifest {0} on disk did not match the expected checksum.", manifestId);
+                    }
                 }
             }
 
@@ -157,21 +176,35 @@ namespace DepotDownloader
 
             if (File.Exists(filename))
             {
-                byte[] expectedChecksum;
+                var checksumFilename = filename + ".sha";
+                byte[] expectedChecksum = null;
 
-                try
+                if (!File.Exists(checksumFilename))
                 {
-                    expectedChecksum = File.ReadAllBytes(filename + ".sha");
+                    if (badHashWarning)
+                    {
+                        Console.WriteLine("Manifest {0} on disk is missing checksum file {1}. Loading without checksum verification.", manifestId, checksumFilename);
+                    }
                 }
-                catch (IOException)
+                else
                 {
-                    expectedChecksum = null;
+                    try
+                    {
+                        expectedChecksum = File.ReadAllBytes(checksumFilename);
+                    }
+                    catch (IOException ex)
+                    {
+                        if (badHashWarning)
+                        {
+                            Console.WriteLine("Unable to read checksum file {0}: {1}", checksumFilename, ex.Message);
+                        }
+                    }
                 }
 
                 byte[] currentChecksum;
                 var oldManifest = ProtoManifest.LoadFromFile(filename, out currentChecksum);
 
-                if (oldManifest != null && (expectedChecksum == null || !expectedChecksum.SequenceEqual(currentChecksum)))
+                if (oldManifest != null && expectedChecksum != null && !expectedChecksum.SequenceEqual(currentChecksum))
                 {
                     oldManifest = null;
 
