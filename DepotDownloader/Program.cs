@@ -167,30 +167,8 @@ namespace DepotDownloader
             }
 
             ContentDownloader.Config.UseLuaFile = HasParameter(args, "-lua");
-            ContentDownloader.Config.LuaFile = GetParameter<string>(args, "-lua");
+            ContentDownloader.Config.LuaFile = GetOptionalParameter(args, "-lua");
             ContentDownloader.Config.LuaManifestIds = [];
-
-            if (ContentDownloader.Config.UseLuaFile)
-            {
-                if (string.IsNullOrWhiteSpace(ContentDownloader.Config.LuaFile))
-                {
-                    Console.WriteLine("Error: -lua requires a file path.");
-                    return 1;
-                }
-
-                try
-                {
-                    var lua = File.ReadAllText(ContentDownloader.Config.LuaFile);
-                    var luaDepotData = DepotKeyStore.AddFromLua(lua);
-                    ContentDownloader.Config.LuaManifestIds = luaDepotData.ManifestIds;
-
-                    Console.WriteLine("Using Lua file: '{0}'.", ContentDownloader.Config.LuaFile);
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine("Warning: Unable to load Lua file: {0}", ex.ToString());
-                }
-            }
 
             ContentDownloader.Config.InstallDirectory = GetParameter<string>(args, "-dir");
 
@@ -246,6 +224,37 @@ namespace DepotDownloader
             {
                 Console.WriteLine("Error: -app not specified!");
                 return 1;
+            }
+
+            if (ContentDownloader.Config.UseLuaFile)
+            {
+                if (string.IsNullOrWhiteSpace(ContentDownloader.Config.LuaFile) && ContentDownloader.Config.UseManifestDirectory)
+                {
+                    var appLuaFile = Path.Combine(ContentDownloader.Config.ManifestDirectory, $"{appId}.lua");
+                    if (File.Exists(appLuaFile))
+                    {
+                        ContentDownloader.Config.LuaFile = appLuaFile;
+                    }
+                }
+
+                if (string.IsNullOrWhiteSpace(ContentDownloader.Config.LuaFile))
+                {
+                    Console.WriteLine("Error: -lua requires a file path or a matching <appid>.lua in -manifestdir.");
+                    return 1;
+                }
+
+                try
+                {
+                    var lua = File.ReadAllText(ContentDownloader.Config.LuaFile);
+                    var luaDepotData = DepotKeyStore.AddFromLua(lua);
+                    ContentDownloader.Config.LuaManifestIds = luaDepotData.ManifestIds;
+
+                    Console.WriteLine("Using Lua file: '{0}'.", ContentDownloader.Config.LuaFile);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("Warning: Unable to load Lua file: {0}", ex.ToString());
+                }
             }
 
             var pubFile = GetParameter(args, "-pubfile", ContentDownloader.INVALID_MANIFEST_ID);
@@ -530,6 +539,21 @@ namespace DepotDownloader
             return default;
         }
 
+        static string GetOptionalParameter(string[] args, string param)
+        {
+            var index = IndexOfParam(args, param);
+
+            if (index == -1 || index == (args.Length - 1))
+                return null;
+
+            var strParam = args[index + 1];
+            if (strParam[0] == '-')
+                return null;
+
+            consumedArgs[index + 1] = true;
+            return strParam;
+        }
+
         static List<T> GetParameterList<T>(string[] args, string param)
         {
             var list = new List<T>();
@@ -630,7 +654,8 @@ namespace DepotDownloader
             Console.WriteLine("  -debug                   - enable verbose debug logging.");
             Console.WriteLine("  -V or --version          - print version and runtime.");
             Console.WriteLine("  -depotkeys <file>        - a list of depot keys to use ('depotID;hexKey' per line).");
-            Console.WriteLine("  -lua <file>              - a Lua file to load depot keys and manifest ids from.");
+            Console.WriteLine("  -lua [file]              - a Lua file to load depot keys and manifest ids from.");
+            Console.WriteLine("                             if file is omitted, uses <manifestdir>/<appid>.lua when available.");
             Console.WriteLine("  -manifestfile <file>     - Use Specified Manifest file from Steam.");
             Console.WriteLine("  -manifestdir <dir>       - Use Steam manifest files from a directory by depot and manifest id.");
             Console.WriteLine("  -appmanifest             - Generate a minimal Steam appmanifest ACF metadata file.");
