@@ -670,9 +670,11 @@ namespace DepotDownloader
             // Persist this run's platform decision (from prompt, CLI, or restored
             // saved state). Idempotent — restoring then re-saving writes back the
             // same bytes; an interactive override or new CLI flag overwrites the
-            // prior entry. UGC paths never reach this block. Inverse of the
+            // prior entry. Skip UGC paths: they never set os/arch/language and
+            // would write {null,null,null}, which a future non-UGC run would
+            // misread as "all platforms" and skip the prompt. Inverse of the
             // RestoreAxis contract above: null on an axis means "no filter".
-            if (DepotConfigStore.Instance != null)
+            if (!isUgc && DepotConfigStore.Instance != null)
             {
                 static string PersistAxis(bool all, string current) => all ? null : current;
 
