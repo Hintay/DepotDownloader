@@ -582,6 +582,127 @@ namespace DepotDownloader
             var depotIdsExpected = depotManifestIds.Select(x => x.depotId).ToList();
             var depots = GetSteam3AppSection(appId, EAppInfoSection.Depots);
 
+            // Hoist the appmanifest.acf read up here (the full resume decision tree
+            // below still uses these locals, but `skipInteractivePrompts` needs
+            // `installed.StateFlags` *before* the depot-enumeration loop runs so
+            // the platform / main-depot / DLC prompts can affect it.
+            var acfPath = ResolveAppManifestPath();
+            var installed = AppManifestReader.TryReadFromFile(acfPath);
+            var appName = GetAppName(appId);
+
+            var skipInteractivePrompts =
+                installed != null && installed.StateFlags != 4;
+
+            // Platform prompt — only when steamLayoutActive, TTY, no platform CLI flag,
+            // not in resume-from-interrupted path, AND at least one axis has >= 2 distinct values.
+            if (steamLayoutActive
+                && Ansi.CanUseInteractiveProgress
+                && !Config.HasExplicitPlatformArgs
+                && !skipInteractivePrompts
+                && depots != null)
+            {
+                var platformSel = AppSelectionPrompt.PromptPlatform(depots);
+
+                if (platformSel.AllPlatforms)
+                {
+                    Config.DownloadAllPlatforms = true;
+                }
+                else if (platformSel.Os != null)
+                {
+                    os = platformSel.Os;
+                }
+
+                if (platformSel.AllArchs)
+                {
+                    Config.DownloadAllArchs = true;
+                }
+                else if (platformSel.Arch != null)
+                {
+                    arch = platformSel.Arch;
+                }
+
+                if (platformSel.AllLanguages)
+                {
+                    Config.DownloadAllLanguages = true;
+                }
+                else if (platformSel.Language != null)
+                {
+                    language = platformSel.Language;
+                }
+            }
+
+            // Main-depot prompt — advanced opt-in via [y/N], only when > 1 non-shared
+            // main depot remains after the platform filter.
+            var deselectedMainDepots = new HashSet<uint>();
+            if (steamLayoutActive
+                && Ansi.CanUseInteractiveProgress
+                && !skipInteractivePrompts
+                && depots != null)
+            {
+                var mainCandidates = AppSelectionPrompt.ComputeMainDepotCandidates(
+                    depots, appId,
+                    os: os ?? Util.GetSteamOS(),
+                    allPlatforms: Config.DownloadAllPlatforms,
+                    arch: arch ?? Util.GetSteamArch(),
+                    allArchs: Config.DownloadAllArchs,
+                    language: language ?? "english",
+                    allLanguages: Config.DownloadAllLanguages);
+
+                if (mainCandidates.Count > 1)
+                {
+                    var selected = AppSelectionPrompt.PromptMainDepots(mainCandidates, depots);
+                    var selectedSet = new HashSet<uint>(selected);
+                    foreach (var id in mainCandidates)
+                    {
+                        if (!selectedSet.Contains(id))
+                        {
+                            deselectedMainDepots.Add(id);
+                        }
+                    }
+                }
+            }
+
+            // DLC prompt — only in Lua batch mode when >= 1 declared DLC app id (in
+            // LuaOwnedApps minus the main appId).
+            if (steamLayoutActive
+                && Ansi.CanUseInteractiveProgress
+                && !skipInteractivePrompts
+                && Config.BatchLuaDownload
+                && Config.LuaOwnedApps != null)
+            {
+                var dlcCandidates = Config.LuaOwnedApps
+                    .Where(id => id != appId)
+                    .OrderBy(id => id)
+                    .ToList();
+
+                if (dlcCandidates.Count >= 1)
+                {
+                    // Batch-prefetch PICS for each DLC app so the prompt can show
+                    // friendly names (falls back to bare app id if denied).
+                    await steam3.RequestAppInfoMany(dlcCandidates);
+
+                    var selected = AppSelectionPrompt.PromptDlcs(
+                        dlcCandidates,
+                        id => GetAppName(id));
+                    var selectedSet = new HashSet<uint>(selected);
+
+                    foreach (var dlcId in dlcCandidates)
+                    {
+                        if (!selectedSet.Contains(dlcId))
+                        {
+                            // Drop from all four locations: Lua manifest map, token map,
+                            // owned-apps set, and the working depot list. The DLC's
+                            // depot id is assumed equal to its app id (the single-depot
+                            // DLC convention used by all current Lua tooling).
+                            Config.LuaManifestIds.Remove(dlcId);
+                            Config.LuaAppTokens?.Remove(dlcId);
+                            Config.LuaOwnedApps.Remove(dlcId);
+                            depotManifestIds.RemoveAll(entry => entry.depotId == dlcId);
+                        }
+                    }
+                }
+            }
+
             if (isUgc)
             {
                 var workshopDepot = depots["workshopdepot"].AsUnsignedInteger();
@@ -610,6 +731,12 @@ namespace DepotDownloader
 
                         if (hasSpecificDepots && !depotIdsExpected.Contains(id))
                             continue;
+
+                        // Apply main-depot deselection (set by the Step 3 prompt).
+                        if (deselectedMainDepots.Contains(id))
+                        {
+                            continue;
+                        }
 
                         if (!hasSpecificDepots)
                         {
@@ -657,6 +784,15 @@ namespace DepotDownloader
                     }
                 }
 
+                // Drop deselected main depots from the working list — in non-Lua
+                // mode they were never added by the loop above (which skips them
+                // via the new `deselectedMainDepots.Contains(id)` continue); in
+                // Lua batch mode they're in `depotManifestIds` from Program.cs.
+                if (deselectedMainDepots.Count > 0)
+                {
+                    depotManifestIds.RemoveAll(entry => deselectedMainDepots.Contains(entry.depotId));
+                }
+
                 if (depotManifestIds.Count == 0 && !hasSpecificDepots)
                 {
                     throw new ContentDownloaderException(string.Format("Couldn't find any depots to download for app {0}", appId));
@@ -692,6 +828,114 @@ namespace DepotDownloader
                 }).ToList();
             }
 
+            // Extend platform filter to Lua-batch depots. Developer mode (explicit
+            // -depot but no Lua batch) is intentionally left alone — user named the
+            // depots, don't second-guess.
+            if (steamLayoutActive
+                && Config.BatchLuaDownload
+                && (!Config.DownloadAllPlatforms || !Config.DownloadAllArchs || !Config.DownloadAllLanguages))
+            {
+                // Identify Lua depots whose parent app PICS we don't yet have. For
+                // depots in main app's PICS section, parent is main app (PICS loaded).
+                // For depots not in main app's PICS, assume parent app id == depot id
+                // (the single-depot DLC convention).
+                var unknownParents = depotManifestIds
+                    .Select(entry => entry.depotId)
+                    .Where(id =>
+                    {
+                        if (depots == null) return true;  // shouldn't happen — defensive
+                        return depots[id.ToString()] == KeyValue.Invalid && !steam3.AppInfo.ContainsKey(id);
+                    })
+                    .Distinct()
+                    .ToList();
+
+                if (unknownParents.Count > 0)
+                {
+                    await steam3.RequestAppInfoMany(unknownParents);
+                }
+
+                var resolvedOs       = os ?? Util.GetSteamOS();
+                var resolvedArch     = arch ?? Util.GetSteamArch();
+                var resolvedLanguage = language ?? "english";
+
+                depotManifestIds = depotManifestIds.Where(entry =>
+                {
+                    var depotId = entry.depotId;
+
+                    // Find this depot's PICS section: either main app's depots[id] or
+                    // a separate app's depots[id] (DLC convention: depot id == app id).
+                    KeyValue depotSection = KeyValue.Invalid;
+                    if (depots != null)
+                    {
+                        depotSection = depots[depotId.ToString()];
+                    }
+                    if (depotSection == KeyValue.Invalid && steam3.AppInfo.TryGetValue(depotId, out var parentInfo) && parentInfo != null)
+                    {
+                        var parentDepots = parentInfo.KeyValues["depots"];
+                        if (parentDepots != KeyValue.Invalid)
+                        {
+                            depotSection = parentDepots[depotId.ToString()];
+                        }
+                    }
+
+                    if (depotSection == KeyValue.Invalid)
+                    {
+                        return true;  // No PICS info -> fail-open, keep.
+                    }
+
+                    var cfg = depotSection["config"];
+                    if (cfg == KeyValue.Invalid)
+                    {
+                        return true;  // No config block -> platform-agnostic, keep.
+                    }
+
+                    if (!Config.DownloadAllPlatforms)
+                    {
+                        var oslist = cfg["oslist"];
+                        if (oslist != KeyValue.Invalid && !string.IsNullOrWhiteSpace(oslist.Value))
+                        {
+                            var arr = oslist.Value.Split(',');
+                            var hit = false;
+                            foreach (var v in arr)
+                            {
+                                if (string.Equals(v.Trim(), resolvedOs, System.StringComparison.Ordinal))
+                                {
+                                    hit = true;
+                                    break;
+                                }
+                            }
+                            if (!hit) return false;
+                        }
+                    }
+
+                    if (!Config.DownloadAllArchs)
+                    {
+                        var osarch = cfg["osarch"];
+                        if (osarch != KeyValue.Invalid && !string.IsNullOrWhiteSpace(osarch.Value))
+                        {
+                            if (!string.Equals(osarch.Value.Trim(), resolvedArch, System.StringComparison.Ordinal))
+                            {
+                                return false;
+                            }
+                        }
+                    }
+
+                    if (!Config.DownloadAllLanguages)
+                    {
+                        var langKv = cfg["language"];
+                        if (langKv != KeyValue.Invalid && !string.IsNullOrWhiteSpace(langKv.Value))
+                        {
+                            if (!string.Equals(langKv.Value.Trim(), resolvedLanguage, System.StringComparison.Ordinal))
+                            {
+                                return false;
+                            }
+                        }
+                    }
+
+                    return true;
+                }).ToList();
+            }
+
             var infos = new List<DepotDownloadInfo>();
 
             foreach (var (depotId, manifestId) in depotManifestIds)
@@ -705,9 +949,8 @@ namespace DepotDownloader
 
             Console.WriteLine();
 
-            var acfPath = ResolveAppManifestPath();
-            var installed = AppManifestReader.TryReadFromFile(acfPath);
-            var appName = GetAppName(appId);
+            // `acfPath`, `installed`, and `appName` are declared earlier (hoisted
+            // before the prompt blocks so `skipInteractivePrompts` could gate them).
             if (installed == null)
             {
                 Console.WriteLine("Installing app {0} ({1})...", appId, appName);
