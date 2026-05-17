@@ -3,6 +3,7 @@
 
 using System.Collections.Generic;
 using System.IO;
+using Spectre.Console;
 
 namespace DepotDownloader
 {
@@ -115,7 +116,54 @@ namespace DepotDownloader
 
         public static IReadOnlyList<MigrationCandidate> Prompt(IReadOnlyList<MigrationCandidate> candidates)
         {
-            return candidates;
+            if (candidates.Count == 0)
+            {
+                return candidates;
+            }
+
+            System.Console.WriteLine("Found {0} depot-mode install(s) that can be migrated to {1}:",
+                candidates.Count, candidates[0].TargetDir);
+            foreach (var c in candidates)
+            {
+                System.Console.WriteLine("  - depot {0}  ->  {1}", c.DepotId, c.SourceDir);
+            }
+            System.Console.Write("Migrate now? [Y]es / [n]o / [p]er-depot: ");
+
+            var input = (System.Console.ReadLine() ?? string.Empty).Trim().ToLowerInvariant();
+
+            switch (input)
+            {
+                case "":
+                case "y":
+                case "yes":
+                    return candidates;
+
+                case "p":
+                case "per":
+                case "per-depot":
+                    return PromptPerDepot(candidates);
+
+                default:
+                    return new List<MigrationCandidate>();
+            }
+        }
+
+        static IReadOnlyList<MigrationCandidate> PromptPerDepot(IReadOnlyList<MigrationCandidate> candidates)
+        {
+            var prompt = new MultiSelectionPrompt<MigrationCandidate>()
+                .Title("Select depots to migrate:")
+                .NotRequired()
+                .PageSize(15)
+                .InstructionsText("[grey](Press [blue]<space>[/] to toggle, [green]<enter>[/] to confirm)[/]")
+                .UseConverter(c => $"depot {c.DepotId}  ->  {c.SourceDir}");
+
+            foreach (var c in candidates)
+            {
+                prompt.AddChoice(c).Select();
+            }
+
+            var selected = AnsiConsole.Prompt(prompt);
+            return selected;
         }
 
         public static void Apply(MigrationCandidate candidate)
