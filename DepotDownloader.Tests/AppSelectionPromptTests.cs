@@ -123,18 +123,18 @@ namespace DepotDownloader.Tests
         }
 
         [Fact]
-        public void ExtractPlatformChoices_BaseLanguages_AreIncluded()
+        public void ExtractPlatformChoices_BaseLanguages_AreIgnoredWithoutDepotLanguageTags()
         {
             var depots = new KeyValue("depots");
             depots.Children.Add(new KeyValue("baselanguages", "english,schinese,japanese"));
 
             var (_, _, language) = AppSelectionPrompt.ExtractPlatformChoices(depots);
 
-            Assert.Equal(new[] { "english", "japanese", "schinese" }, language);
+            Assert.Empty(language);
         }
 
         [Fact]
-        public void ExtractPlatformChoices_CommonSupportedLanguages_AreIncluded()
+        public void ExtractPlatformChoices_CommonSupportedLanguages_AreIgnoredWithoutDepotLanguageTags()
         {
             var depots = new KeyValue("depots");
             var common = new KeyValue("common");
@@ -145,7 +145,7 @@ namespace DepotDownloader.Tests
 
             var (_, _, language) = AppSelectionPrompt.ExtractPlatformChoices(depots, common);
 
-            Assert.Equal(new[] { "english", "schinese" }, language);
+            Assert.Empty(language);
         }
 
         // --- ComputeMainDepotCandidates ---

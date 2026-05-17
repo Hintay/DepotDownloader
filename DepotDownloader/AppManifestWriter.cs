@@ -61,6 +61,13 @@ namespace DepotDownloader
                 root.Children.Add(new KeyValue("TargetBuildID", manifest.BuildId.ToString()));
             }
 
+            if (!string.IsNullOrWhiteSpace(manifest.Language))
+            {
+                var userConfig = new KeyValue("UserConfig");
+                userConfig.Children.Add(new KeyValue("language", manifest.Language));
+                root.Children.Add(userConfig);
+            }
+
             var depots = new KeyValue("InstalledDepots");
             foreach (var depot in manifest.Depots.OrderBy(d => d.DepotId))
             {

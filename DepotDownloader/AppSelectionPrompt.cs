@@ -41,9 +41,6 @@ namespace DepotDownloader
             var archSet = new SortedSet<string>(StringComparer.Ordinal);
             var languageSet = new SortedSet<string>(StringComparer.Ordinal);
 
-            AddDepotLanguageChoices(mainAppDepots, languageSet);
-            AddCommonLanguageChoices(mainAppCommon, languageSet);
-
             if (mainAppDepots == null || mainAppDepots == KeyValue.Invalid)
             {
                 return (new List<string>(osSet), new List<string>(archSet), new List<string>(languageSet));
@@ -84,56 +81,6 @@ namespace DepotDownloader
             }
 
             return (new List<string>(osSet), new List<string>(archSet), new List<string>(languageSet));
-        }
-
-        static void AddDepotLanguageChoices(KeyValue mainAppDepots, SortedSet<string> languageSet)
-        {
-            if (mainAppDepots == null || mainAppDepots == KeyValue.Invalid)
-            {
-                return;
-            }
-
-            var baseLanguages = mainAppDepots["baselanguages"];
-            if (baseLanguages == KeyValue.Invalid || string.IsNullOrWhiteSpace(baseLanguages.Value))
-            {
-                return;
-            }
-
-            foreach (var part in baseLanguages.Value.Split(','))
-            {
-                var trimmed = part.Trim();
-                if (!string.IsNullOrEmpty(trimmed))
-                {
-                    languageSet.Add(trimmed);
-                }
-            }
-        }
-
-        static void AddCommonLanguageChoices(KeyValue mainAppCommon, SortedSet<string> languageSet)
-        {
-            if (mainAppCommon == null || mainAppCommon == KeyValue.Invalid)
-            {
-                return;
-            }
-
-            AddLanguageChildNames(mainAppCommon["supported_languages"], languageSet);
-            AddLanguageChildNames(mainAppCommon["languages"], languageSet);
-        }
-
-        static void AddLanguageChildNames(KeyValue languageRoot, SortedSet<string> languageSet)
-        {
-            if (languageRoot == null || languageRoot == KeyValue.Invalid)
-            {
-                return;
-            }
-
-            foreach (var child in languageRoot.Children)
-            {
-                if (!string.IsNullOrWhiteSpace(child.Name))
-                {
-                    languageSet.Add(child.Name.Trim());
-                }
-            }
         }
 
         // Pure helper — tested. Given the main app's PICS depots tree, the appId,
@@ -389,8 +336,8 @@ namespace DepotDownloader
             string osPick = osChoices.Count == 1 ? osChoices[0] : null;
             bool allArchs = false;
             string archPick = archChoices.Count == 1 ? archChoices[0] : null;
-            bool allLanguages = false;
-            string languagePick = languageChoices.Count == 1 ? languageChoices[0] : null;
+            bool allLanguages = languageChoices.Count == 0;
+            string languagePick = null;
 
             if (osChoices.Count >= 2)
             {
@@ -428,7 +375,7 @@ namespace DepotDownloader
                 }
             }
 
-            if (languageChoices.Count >= 2)
+            if (languageChoices.Count >= 1)
             {
                 var choices = new List<string>(languageChoices) { "All languages" };
                 var picked = AnsiConsole.Prompt(

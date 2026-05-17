@@ -357,7 +357,7 @@ namespace DepotDownloader
                 GetAppName(appId),
                 GetAppInstallDir(appId),
                 GetSteam3AppBuildNumber(appId, branch),
-                language ?? "english",
+                language,
                 stateFlags,
                 depots.Select(depot => new SteamAppManifestDepot(depot.DepotId, depot.ManifestId)).ToList());
 
