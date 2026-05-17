@@ -602,12 +602,14 @@ namespace DepotDownloader
             var platformPromptRan = false;
 
             // Platform prompt — only when steamLayoutActive, TTY, no platform CLI flag,
-            // not in resume-from-interrupted path, AND at least one axis has >= 2 distinct values.
+            // not in resume-from-interrupted path, no saved choice for this app yet,
+            // AND at least one axis has >= 2 distinct values.
             if (steamLayoutActive
                 && Ansi.CanUseInteractiveProgress
                 && !Config.HasExplicitPlatformArgs
                 && !skipInteractivePrompts
-                && depots != null)
+                && depots != null
+                && !(DepotConfigStore.Instance?.AppConfigs.ContainsKey(appId) ?? false))
             {
                 var platformSel = AppSelectionPrompt.PromptPlatform(depots, common);
 
