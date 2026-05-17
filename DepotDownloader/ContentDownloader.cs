@@ -594,6 +594,13 @@ namespace DepotDownloader
             var skipInteractivePrompts =
                 installed != null && installed.StateFlags != InstalledAppManifest.StateFullyInstalled;
 
+            // Tracks whether the user actually opted into platform filtering this run
+            // (either via the interactive prompt below, or via a CLI platform flag).
+            // The Lua-batch platform filter at the bottom of this method gates on this
+            // so we don't silently prune Lua depots against host defaults when the user
+            // never picked a platform (e.g. non-TTY runs without -os/-osarch/-language).
+            var platformPromptRan = false;
+
             // Platform prompt — only when steamLayoutActive, TTY, no platform CLI flag,
             // not in resume-from-interrupted path, AND at least one axis has >= 2 distinct values.
             if (steamLayoutActive
@@ -630,6 +637,47 @@ namespace DepotDownloader
                 {
                     language = platformSel.Language;
                 }
+
+                platformPromptRan = true;
+            }
+
+            // Restore prior platform choice on resume / second run when the user
+            // didn't override via CLI and the interactive prompt didn't fire.
+            // Setting platformPromptRan = true propagates the choice to the
+            // Lua-batch post-resolution filter (which gates on it).
+            if (!Config.HasExplicitPlatformArgs
+                && !platformPromptRan
+                && DepotConfigStore.Instance != null
+                && DepotConfigStore.Instance.AppConfigs.TryGetValue(appId, out var savedAppCfg))
+            {
+                if (savedAppCfg.Os != null)
+                {
+                    os = savedAppCfg.Os;
+                }
+                else
+                {
+                    Config.DownloadAllPlatforms = true;
+                }
+
+                if (savedAppCfg.Arch != null)
+                {
+                    arch = savedAppCfg.Arch;
+                }
+                else
+                {
+                    Config.DownloadAllArchs = true;
+                }
+
+                if (savedAppCfg.Language != null)
+                {
+                    language = savedAppCfg.Language;
+                }
+                else
+                {
+                    Config.DownloadAllLanguages = true;
+                }
+
+                platformPromptRan = true;
             }
 
             // Main-depot prompt — advanced opt-in via [y/N], only when > 1 non-shared
@@ -824,9 +872,12 @@ namespace DepotDownloader
 
             // Extend platform filter to Lua-batch depots. Developer mode (explicit
             // -depot but no Lua batch) is intentionally left alone — user named the
-            // depots, don't second-guess.
+            // depots, don't second-guess. Also skip when the user never opted into
+            // platform filtering (no CLI flag, no interactive prompt) — otherwise we
+            // would prune Lua depots against host defaults the user never confirmed.
             if (steamLayoutActive
                 && Config.BatchLuaDownload
+                && (Config.HasExplicitPlatformArgs || platformPromptRan)
                 && (!Config.DownloadAllPlatforms || !Config.DownloadAllArchs || !Config.DownloadAllLanguages))
             {
                 // Identify Lua depots whose parent app PICS we don't yet have. For
