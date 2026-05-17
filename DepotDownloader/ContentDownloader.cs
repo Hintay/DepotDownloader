@@ -650,34 +650,37 @@ namespace DepotDownloader
                 && DepotConfigStore.Instance != null
                 && DepotConfigStore.Instance.AppConfigs.TryGetValue(appId, out var savedAppCfg))
             {
-                if (savedAppCfg.Os != null)
+                // Saved non-null value wins; saved null means "no filter on this axis"
+                // (all-platforms / all-archs / all-languages).
+                static void RestoreAxis(string saved, ref string target, Action setAll)
                 {
-                    os = savedAppCfg.Os;
-                }
-                else
-                {
-                    Config.DownloadAllPlatforms = true;
-                }
-
-                if (savedAppCfg.Arch != null)
-                {
-                    arch = savedAppCfg.Arch;
-                }
-                else
-                {
-                    Config.DownloadAllArchs = true;
+                    if (saved != null) target = saved;
+                    else setAll();
                 }
 
-                if (savedAppCfg.Language != null)
-                {
-                    language = savedAppCfg.Language;
-                }
-                else
-                {
-                    Config.DownloadAllLanguages = true;
-                }
+                RestoreAxis(savedAppCfg.Os, ref os, () => Config.DownloadAllPlatforms = true);
+                RestoreAxis(savedAppCfg.Arch, ref arch, () => Config.DownloadAllArchs = true);
+                RestoreAxis(savedAppCfg.Language, ref language, () => Config.DownloadAllLanguages = true);
 
                 platformPromptRan = true;
+            }
+
+            // Persist this run's platform decision (from prompt, CLI, or restored
+            // saved state). Idempotent — restoring then re-saving writes back the
+            // same bytes; an interactive override or new CLI flag overwrites the
+            // prior entry. UGC paths never reach this block. Inverse of the
+            // RestoreAxis contract above: null on an axis means "no filter".
+            if (DepotConfigStore.Instance != null)
+            {
+                static string PersistAxis(bool all, string current) => all ? null : current;
+
+                DepotConfigStore.Instance.AppConfigs[appId] = new AppDownloadConfig
+                {
+                    Os = PersistAxis(Config.DownloadAllPlatforms, os),
+                    Arch = PersistAxis(Config.DownloadAllArchs, arch),
+                    Language = PersistAxis(Config.DownloadAllLanguages, language),
+                };
+                DepotConfigStore.Save();
             }
 
             // Main-depot prompt — advanced opt-in via [y/N], only when > 1 non-shared
