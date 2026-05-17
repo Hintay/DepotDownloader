@@ -12,28 +12,27 @@ namespace DepotDownloader.Tests
     [Collection("DepotConfigStoreSingleton")]
     public class DepotConfigStoreTests : IDisposable
     {
-        readonly string _tempFile;
+        readonly string tempFile;
 
         public DepotConfigStoreTests()
         {
-            _tempFile = Path.GetTempFileName();
+            tempFile = Path.Combine(Path.GetTempPath(), $"dd-cfg-{Guid.NewGuid():N}.bin");
             DepotConfigStore.Instance = null;
         }
 
         public void Dispose()
         {
             DepotConfigStore.Instance = null;
-            if (File.Exists(_tempFile))
+            if (File.Exists(tempFile))
             {
-                File.Delete(_tempFile);
+                File.Delete(tempFile);
             }
         }
 
         [Fact]
         public void RoundTrip_PreservesAllThreeFields()
         {
-            File.Delete(_tempFile);
-            DepotConfigStore.LoadFromFile(_tempFile);
+            DepotConfigStore.LoadFromFile(tempFile);
             DepotConfigStore.Instance.AppConfigs[12345] = new AppDownloadConfig
             {
                 Os = "windows",
@@ -43,7 +42,7 @@ namespace DepotDownloader.Tests
             DepotConfigStore.Save();
 
             DepotConfigStore.Instance = null;
-            DepotConfigStore.LoadFromFile(_tempFile);
+            DepotConfigStore.LoadFromFile(tempFile);
 
             Assert.True(DepotConfigStore.Instance.AppConfigs.TryGetValue(12345, out var cfg));
             Assert.Equal("windows", cfg.Os);
@@ -54,8 +53,7 @@ namespace DepotDownloader.Tests
         [Fact]
         public void RoundTrip_PreservesAllNulls()
         {
-            File.Delete(_tempFile);
-            DepotConfigStore.LoadFromFile(_tempFile);
+            DepotConfigStore.LoadFromFile(tempFile);
             DepotConfigStore.Instance.AppConfigs[12345] = new AppDownloadConfig
             {
                 Os = null,
@@ -65,7 +63,7 @@ namespace DepotDownloader.Tests
             DepotConfigStore.Save();
 
             DepotConfigStore.Instance = null;
-            DepotConfigStore.LoadFromFile(_tempFile);
+            DepotConfigStore.LoadFromFile(tempFile);
 
             Assert.True(DepotConfigStore.Instance.AppConfigs.TryGetValue(12345, out var cfg));
             Assert.Null(cfg.Os);
@@ -76,8 +74,7 @@ namespace DepotDownloader.Tests
         [Fact]
         public void RoundTrip_MixedNullAndValue()
         {
-            File.Delete(_tempFile);
-            DepotConfigStore.LoadFromFile(_tempFile);
+            DepotConfigStore.LoadFromFile(tempFile);
             DepotConfigStore.Instance.AppConfigs[12345] = new AppDownloadConfig
             {
                 Os = "linux",
@@ -87,7 +84,7 @@ namespace DepotDownloader.Tests
             DepotConfigStore.Save();
 
             DepotConfigStore.Instance = null;
-            DepotConfigStore.LoadFromFile(_tempFile);
+            DepotConfigStore.LoadFromFile(tempFile);
 
             Assert.True(DepotConfigStore.Instance.AppConfigs.TryGetValue(12345, out var cfg));
             Assert.Equal("linux", cfg.Os);
@@ -98,13 +95,12 @@ namespace DepotDownloader.Tests
         [Fact]
         public void BackwardCompat_OldFileWithOnlyInstalledManifestIDsLoads()
         {
-            File.Delete(_tempFile);
-            DepotConfigStore.LoadFromFile(_tempFile);
+            DepotConfigStore.LoadFromFile(tempFile);
             DepotConfigStore.Instance.InstalledManifestIDs[999] = 123456789UL;
             DepotConfigStore.Save();
 
             DepotConfigStore.Instance = null;
-            DepotConfigStore.LoadFromFile(_tempFile);
+            DepotConfigStore.LoadFromFile(tempFile);
 
             Assert.NotNull(DepotConfigStore.Instance.AppConfigs);
             Assert.Empty(DepotConfigStore.Instance.AppConfigs);
@@ -114,14 +110,13 @@ namespace DepotDownloader.Tests
         [Fact]
         public void RoundTrip_MultipleApps()
         {
-            File.Delete(_tempFile);
-            DepotConfigStore.LoadFromFile(_tempFile);
+            DepotConfigStore.LoadFromFile(tempFile);
             DepotConfigStore.Instance.AppConfigs[111] = new AppDownloadConfig { Os = "windows", Arch = "64", Language = "english" };
             DepotConfigStore.Instance.AppConfigs[222] = new AppDownloadConfig { Os = "linux", Arch = null, Language = "russian" };
             DepotConfigStore.Save();
 
             DepotConfigStore.Instance = null;
-            DepotConfigStore.LoadFromFile(_tempFile);
+            DepotConfigStore.LoadFromFile(tempFile);
 
             Assert.Equal(2, DepotConfigStore.Instance.AppConfigs.Count);
             Assert.Equal("windows", DepotConfigStore.Instance.AppConfigs[111].Os);
