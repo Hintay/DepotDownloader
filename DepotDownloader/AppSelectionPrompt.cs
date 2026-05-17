@@ -1,6 +1,7 @@
 // This file is subject to the terms and conditions defined
 // in file 'LICENSE', which is part of this source code package.
 
+using System;
 using System.Collections.Generic;
 using Spectre.Console;
 using SteamKit2;
@@ -27,9 +28,9 @@ namespace DepotDownloader
             IReadOnlyList<string> Language)
         ExtractPlatformChoices(KeyValue mainAppDepots)
         {
-            var osSet       = new System.Collections.Generic.SortedSet<string>(System.StringComparer.Ordinal);
-            var archSet     = new System.Collections.Generic.SortedSet<string>(System.StringComparer.Ordinal);
-            var languageSet = new System.Collections.Generic.SortedSet<string>(System.StringComparer.Ordinal);
+            var osSet       = new SortedSet<string>(StringComparer.Ordinal);
+            var archSet     = new SortedSet<string>(StringComparer.Ordinal);
+            var languageSet = new SortedSet<string>(StringComparer.Ordinal);
 
             if (mainAppDepots == null || mainAppDepots == KeyValue.Invalid)
             {
@@ -113,53 +114,9 @@ namespace DepotDownloader
 
                 // Apply platform filter (mirrors ContentDownloader.cs depot-loop filter).
                 var cfg = depotSection["config"];
-                if (cfg != KeyValue.Invalid)
+                if (!DepotMatchesPlatform(cfg, os, allPlatforms, arch, allArchs, language, allLanguages))
                 {
-                    if (!allPlatforms)
-                    {
-                        var oslist = cfg["oslist"];
-                        if (oslist != KeyValue.Invalid && !string.IsNullOrWhiteSpace(oslist.Value))
-                        {
-                            var arr = oslist.Value.Split(',');
-                            var hit = false;
-                            foreach (var v in arr)
-                            {
-                                if (string.Equals(v.Trim(), os, System.StringComparison.Ordinal))
-                                {
-                                    hit = true;
-                                    break;
-                                }
-                            }
-                            if (!hit)
-                            {
-                                continue;
-                            }
-                        }
-                    }
-
-                    if (!allArchs)
-                    {
-                        var osarch = cfg["osarch"];
-                        if (osarch != KeyValue.Invalid && !string.IsNullOrWhiteSpace(osarch.Value))
-                        {
-                            if (!string.Equals(osarch.Value.Trim(), arch, System.StringComparison.Ordinal))
-                            {
-                                continue;
-                            }
-                        }
-                    }
-
-                    if (!allLanguages)
-                    {
-                        var langKv = cfg["language"];
-                        if (langKv != KeyValue.Invalid && !string.IsNullOrWhiteSpace(langKv.Value))
-                        {
-                            if (!string.Equals(langKv.Value.Trim(), language, System.StringComparison.Ordinal))
-                            {
-                                continue;
-                            }
-                        }
-                    }
+                    continue;
                 }
                 // Depot with no `config` block at all is platform-agnostic — kept unconditionally.
 
@@ -167,6 +124,74 @@ namespace DepotDownloader
             }
 
             return result;
+        }
+
+        // Pure helper — tested. Returns true if the depot's config block matches the
+        // user's platform selection. A depot with no config (KeyValue.Invalid) or with
+        // empty/missing oslist/osarch/language values is treated as platform-agnostic
+        // and matches. When a depot specifies a value the user did not pass an all*
+        // override for, returns false only on mismatch (ordinal comparison after trim).
+        internal static bool DepotMatchesPlatform(
+            KeyValue depotConfig,
+            string os,
+            bool allPlatforms,
+            string arch,
+            bool allArchs,
+            string language,
+            bool allLanguages)
+        {
+            if (depotConfig == null || depotConfig == KeyValue.Invalid)
+            {
+                return true;
+            }
+
+            if (!allPlatforms)
+            {
+                var oslist = depotConfig["oslist"];
+                if (oslist != KeyValue.Invalid && !string.IsNullOrWhiteSpace(oslist.Value))
+                {
+                    var arr = oslist.Value.Split(',');
+                    var hit = false;
+                    foreach (var v in arr)
+                    {
+                        if (string.Equals(v.Trim(), os, StringComparison.Ordinal))
+                        {
+                            hit = true;
+                            break;
+                        }
+                    }
+                    if (!hit)
+                    {
+                        return false;
+                    }
+                }
+            }
+
+            if (!allArchs)
+            {
+                var osarch = depotConfig["osarch"];
+                if (osarch != KeyValue.Invalid && !string.IsNullOrWhiteSpace(osarch.Value))
+                {
+                    if (!string.Equals(osarch.Value.Trim(), arch, StringComparison.Ordinal))
+                    {
+                        return false;
+                    }
+                }
+            }
+
+            if (!allLanguages)
+            {
+                var langKv = depotConfig["language"];
+                if (langKv != KeyValue.Invalid && !string.IsNullOrWhiteSpace(langKv.Value))
+                {
+                    if (!string.Equals(langKv.Value.Trim(), language, StringComparison.Ordinal))
+                    {
+                        return false;
+                    }
+                }
+            }
+
+            return true;
         }
 
         public static PlatformSelection PromptPlatform(KeyValue mainAppDepots)
@@ -188,7 +213,7 @@ namespace DepotDownloader
                         .Title("Target OS:")
                         .PageSize(10)
                         .AddChoices(choices));
-                if (string.Equals(picked, "All platforms", System.StringComparison.Ordinal))
+                if (string.Equals(picked, "All platforms", StringComparison.Ordinal))
                 {
                     allPlatforms = true;
                 }
@@ -206,7 +231,7 @@ namespace DepotDownloader
                         .Title("Target architecture:")
                         .PageSize(10)
                         .AddChoices(choices));
-                if (string.Equals(picked, "All architectures", System.StringComparison.Ordinal))
+                if (string.Equals(picked, "All architectures", StringComparison.Ordinal))
                 {
                     allArchs = true;
                 }
@@ -224,7 +249,7 @@ namespace DepotDownloader
                         .Title("Target language:")
                         .PageSize(15)
                         .AddChoices(choices));
-                if (string.Equals(picked, "All languages", System.StringComparison.Ordinal))
+                if (string.Equals(picked, "All languages", StringComparison.Ordinal))
                 {
                     allLanguages = true;
                 }

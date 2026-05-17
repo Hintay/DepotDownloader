@@ -216,6 +216,85 @@ namespace DepotDownloader.Tests
             Assert.DoesNotContain(601151u, result);
         }
 
+        // --- DepotMatchesPlatform ---
+
+        [Fact]
+        public void DepotMatchesPlatform_EmptyConfig_ReturnsTrue()
+        {
+            // KeyValue.Invalid (no config block at all) -> platform-agnostic, keep.
+            var result = AppSelectionPrompt.DepotMatchesPlatform(
+                KeyValue.Invalid,
+                os: "windows", allPlatforms: false,
+                arch: "64", allArchs: false,
+                language: "english", allLanguages: false);
+
+            Assert.True(result);
+        }
+
+        [Fact]
+        public void DepotMatchesPlatform_ExactMatch_ReturnsTrue()
+        {
+            var cfg = new KeyValue("config");
+            cfg.Children.Add(new KeyValue("oslist", "windows"));
+            cfg.Children.Add(new KeyValue("osarch", "64"));
+            cfg.Children.Add(new KeyValue("language", "english"));
+
+            var result = AppSelectionPrompt.DepotMatchesPlatform(
+                cfg,
+                os: "windows", allPlatforms: false,
+                arch: "64", allArchs: false,
+                language: "english", allLanguages: false);
+
+            Assert.True(result);
+        }
+
+        [Fact]
+        public void DepotMatchesPlatform_OsMismatch_ReturnsFalse()
+        {
+            var cfg = new KeyValue("config");
+            cfg.Children.Add(new KeyValue("oslist", "macos"));
+
+            var result = AppSelectionPrompt.DepotMatchesPlatform(
+                cfg,
+                os: "windows", allPlatforms: false,
+                arch: "64", allArchs: false,
+                language: "english", allLanguages: false);
+
+            Assert.False(result);
+        }
+
+        [Fact]
+        public void DepotMatchesPlatform_AllFlagBypassesMismatch_ReturnsTrue()
+        {
+            var cfg = new KeyValue("config");
+            cfg.Children.Add(new KeyValue("oslist", "macos"));
+            cfg.Children.Add(new KeyValue("osarch", "32"));
+            cfg.Children.Add(new KeyValue("language", "schinese"));
+
+            var result = AppSelectionPrompt.DepotMatchesPlatform(
+                cfg,
+                os: "windows", allPlatforms: true,
+                arch: "64", allArchs: true,
+                language: "english", allLanguages: true);
+
+            Assert.True(result);
+        }
+
+        [Fact]
+        public void DepotMatchesPlatform_CommaSeparatedOsListWithWhitespace_TrimsAndMatches()
+        {
+            var cfg = new KeyValue("config");
+            cfg.Children.Add(new KeyValue("oslist", "linux, windows , macos"));
+
+            var result = AppSelectionPrompt.DepotMatchesPlatform(
+                cfg,
+                os: "windows", allPlatforms: false,
+                arch: "64", allArchs: false,
+                language: "english", allLanguages: false);
+
+            Assert.True(result);
+        }
+
         // Helper: build a depot KV node like PICS would return:
         // "601151" {
         //   "depotfromapp" "601150"    (optional)

@@ -591,7 +591,7 @@ namespace DepotDownloader
             var appName = GetAppName(appId);
 
             var skipInteractivePrompts =
-                installed != null && installed.StateFlags != 4;
+                installed != null && installed.StateFlags != InstalledAppManifest.StateFullyInstalled;
 
             // Platform prompt — only when steamLayoutActive, TTY, no platform CLI flag,
             // not in resume-from-interrupted path, AND at least one axis has >= 2 distinct values.
@@ -632,11 +632,15 @@ namespace DepotDownloader
             }
 
             // Main-depot prompt — advanced opt-in via [y/N], only when > 1 non-shared
-            // main depot remains after the platform filter.
+            // main depot remains after the platform filter. Skip when the user named
+            // depots explicitly via -depot: the prompt would enumerate ALL PICS depots
+            // (not just user-named ones), and a follow-up prune at the end of the
+            // depot loop would silently drop CLI-named depots the user did request.
             var deselectedMainDepots = new HashSet<uint>();
             if (steamLayoutActive
                 && Ansi.CanUseInteractiveProgress
                 && !skipInteractivePrompts
+                && !Config.HasExplicitDepots
                 && depots != null)
             {
                 var mainCandidates = AppSelectionPrompt.ComputeMainDepotCandidates(
@@ -675,7 +679,7 @@ namespace DepotDownloader
                     .OrderBy(id => id)
                     .ToList();
 
-                if (dlcCandidates.Count >= 1)
+                if (dlcCandidates.Count > 0)
                 {
                     // Batch-prefetch PICS for each DLC app so the prompt can show
                     // friendly names (falls back to bare app id if denied).
@@ -694,7 +698,7 @@ namespace DepotDownloader
                             // owned-apps set, and the working depot list. The DLC's
                             // depot id is assumed equal to its app id (the single-depot
                             // DLC convention used by all current Lua tooling).
-                            Config.LuaManifestIds.Remove(dlcId);
+                            Config.LuaManifestIds?.Remove(dlcId);
                             Config.LuaAppTokens?.Remove(dlcId);
                             Config.LuaOwnedApps.Remove(dlcId);
                             depotManifestIds.RemoveAll(entry => entry.depotId == dlcId);
@@ -741,39 +745,21 @@ namespace DepotDownloader
                         if (!hasSpecificDepots)
                         {
                             var depotConfig = depotSection["config"];
-                            if (depotConfig != KeyValue.Invalid)
+                            if (!AppSelectionPrompt.DepotMatchesPlatform(
+                                    depotConfig,
+                                    os ?? Util.GetSteamOS(), Config.DownloadAllPlatforms,
+                                    arch ?? Util.GetSteamArch(), Config.DownloadAllArchs,
+                                    language ?? "english", Config.DownloadAllLanguages))
                             {
-                                if (!Config.DownloadAllPlatforms &&
-                                    depotConfig["oslist"] != KeyValue.Invalid &&
-                                    !string.IsNullOrWhiteSpace(depotConfig["oslist"].Value))
-                                {
-                                    var oslist = depotConfig["oslist"].Value.Split(',');
-                                    if (Array.IndexOf(oslist, os ?? Util.GetSteamOS()) == -1)
-                                        continue;
-                                }
+                                continue;
+                            }
 
-                                if (!Config.DownloadAllArchs &&
-                                    depotConfig["osarch"] != KeyValue.Invalid &&
-                                    !string.IsNullOrWhiteSpace(depotConfig["osarch"].Value))
-                                {
-                                    var depotArch = depotConfig["osarch"].Value;
-                                    if (depotArch != (arch ?? Util.GetSteamArch()))
-                                        continue;
-                                }
-
-                                if (!Config.DownloadAllLanguages &&
-                                    depotConfig["language"] != KeyValue.Invalid &&
-                                    !string.IsNullOrWhiteSpace(depotConfig["language"].Value))
-                                {
-                                    var depotLang = depotConfig["language"].Value;
-                                    if (depotLang != (language ?? "english"))
-                                        continue;
-                                }
-
-                                if (!lv &&
-                                    depotConfig["lowviolence"] != KeyValue.Invalid &&
-                                    depotConfig["lowviolence"].AsBoolean())
-                                    continue;
+                            if (depotConfig != KeyValue.Invalid &&
+                                !lv &&
+                                depotConfig["lowviolence"] != KeyValue.Invalid &&
+                                depotConfig["lowviolence"].AsBoolean())
+                            {
+                                continue;
                             }
                         }
 
@@ -883,56 +869,11 @@ namespace DepotDownloader
                         return true;  // No PICS info -> fail-open, keep.
                     }
 
-                    var cfg = depotSection["config"];
-                    if (cfg == KeyValue.Invalid)
-                    {
-                        return true;  // No config block -> platform-agnostic, keep.
-                    }
-
-                    if (!Config.DownloadAllPlatforms)
-                    {
-                        var oslist = cfg["oslist"];
-                        if (oslist != KeyValue.Invalid && !string.IsNullOrWhiteSpace(oslist.Value))
-                        {
-                            var arr = oslist.Value.Split(',');
-                            var hit = false;
-                            foreach (var v in arr)
-                            {
-                                if (string.Equals(v.Trim(), resolvedOs, System.StringComparison.Ordinal))
-                                {
-                                    hit = true;
-                                    break;
-                                }
-                            }
-                            if (!hit) return false;
-                        }
-                    }
-
-                    if (!Config.DownloadAllArchs)
-                    {
-                        var osarch = cfg["osarch"];
-                        if (osarch != KeyValue.Invalid && !string.IsNullOrWhiteSpace(osarch.Value))
-                        {
-                            if (!string.Equals(osarch.Value.Trim(), resolvedArch, System.StringComparison.Ordinal))
-                            {
-                                return false;
-                            }
-                        }
-                    }
-
-                    if (!Config.DownloadAllLanguages)
-                    {
-                        var langKv = cfg["language"];
-                        if (langKv != KeyValue.Invalid && !string.IsNullOrWhiteSpace(langKv.Value))
-                        {
-                            if (!string.Equals(langKv.Value.Trim(), resolvedLanguage, System.StringComparison.Ordinal))
-                            {
-                                return false;
-                            }
-                        }
-                    }
-
-                    return true;
+                    return AppSelectionPrompt.DepotMatchesPlatform(
+                        depotSection["config"],
+                        resolvedOs, Config.DownloadAllPlatforms,
+                        resolvedArch, Config.DownloadAllArchs,
+                        resolvedLanguage, Config.DownloadAllLanguages);
                 }).ToList();
             }
 
@@ -955,7 +896,7 @@ namespace DepotDownloader
             {
                 Console.WriteLine("Installing app {0} ({1})...", appId, appName);
             }
-            else if (installed.StateFlags == 4)
+            else if (installed.StateFlags == InstalledAppManifest.StateFullyInstalled)
             {
                 var mismatched = 0;
                 foreach (var (depotId, manifestId) in infos.Select(d => (d.DepotId, d.ManifestId)))
@@ -980,7 +921,7 @@ namespace DepotDownloader
                     Console.WriteLine("App {0} ({1}) is fully installed; re-verifying because -verify-all was passed.", appId, appName);
                 }
             }
-            else // StateFlags != 4
+            else // StateFlags != StateFullyInstalled (resume-from-interrupted path)
             {
                 var completed = 0;
                 foreach (var (depotId, manifestId) in infos.Select(d => (d.DepotId, d.ManifestId)))

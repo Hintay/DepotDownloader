@@ -10,6 +10,12 @@ namespace DepotDownloader
 {
     sealed class InstalledAppManifest(uint appId, uint stateFlags, uint buildId, IReadOnlyDictionary<uint, ulong> installedDepots)
     {
+        // StateFlags value indicating the app is fully installed (no pending update,
+        // interrupted download, or other in-progress state). Used by ContentDownloader
+        // to distinguish a clean "nothing to do / verify" from a resume-from-interrupted
+        // path. Mirrors Steam's own AppState_FullyInstalled = 4.
+        public const uint StateFullyInstalled = 4;
+
         public uint AppId { get; } = appId;
         public uint StateFlags { get; } = stateFlags;
         public uint BuildId { get; } = buildId;
