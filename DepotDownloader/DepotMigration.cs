@@ -296,7 +296,7 @@ namespace DepotDownloader
                         "Migrated depot {0} (manifest {1}) from {2} to {3}",
                         candidate.DepotId, candidate.ManifestId, candidate.SourceDir, candidate.TargetDir);
                 }
-                catch (System.Exception ex)
+                catch (System.Exception ex) when (ex is not System.OperationCanceledException)
                 {
                     System.Console.WriteLine(
                         "Migration of depot {0} failed: {1}. Some files may be left at {2}.",
