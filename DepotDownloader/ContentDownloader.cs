@@ -34,6 +34,7 @@ namespace DepotDownloader
         private static CDNClientPool cdnPool;
 
         private const string DEFAULT_DOWNLOAD_DIR = "depots";
+        private const string STEAMAPPS_DIR = "steamapps";
         private const string CONFIG_DIR = ".DepotDownloader";
         private static readonly string STAGING_DIR = Path.Combine(CONFIG_DIR, "staging");
 
@@ -501,17 +502,35 @@ namespace DepotDownloader
         {
             cdnPool = new CDNClientPool(steam3, appId);
 
+            await steam3?.RequestAppInfo(appId);
+
+            // Activate Steam-style library layout when the user didn't pin a -dir,
+            // isn't doing UGC, and didn't pass an explicit -depot. In that case all
+            // depots of the app get merged into ./steamapps/common/<installdir>/ and
+            // the .acf state file lives alongside, matching Steam's on-disk convention.
+            var steamLayoutActive = string.IsNullOrWhiteSpace(Config.InstallDirectory)
+                                    && !isUgc
+                                    && !Config.HasExplicitDepots;
+            if (steamLayoutActive)
+            {
+                Config.InstallDirectory = Path.Combine(STEAMAPPS_DIR, "common", GetAppInstallDir(appId));
+            }
+
             // Load our configuration data containing the depots currently installed
             var configPath = Config.InstallDirectory;
             if (string.IsNullOrWhiteSpace(configPath))
             {
                 configPath = DEFAULT_DOWNLOAD_DIR;
             }
+            if (steamLayoutActive)
+            {
+                // Library-level state root: depot.config and appmanifest_<id>.acf live at
+                // ./steamapps/, not nested inside ./steamapps/common/<installdir>/.
+                configPath = STEAMAPPS_DIR;
+            }
 
             Directory.CreateDirectory(Path.Combine(configPath, CONFIG_DIR));
             DepotConfigStore.LoadFromFile(Path.Combine(configPath, CONFIG_DIR, "depot.config"));
-
-            await steam3?.RequestAppInfo(appId);
             /*
             if (!await AccountHasAccess(appId))
             {
