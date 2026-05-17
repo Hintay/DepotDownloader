@@ -172,6 +172,7 @@ namespace DepotDownloader
             ContentDownloader.Config.LuaAppTokens = [];
 
             ContentDownloader.Config.InstallDirectory = GetParameter<string>(args, "-dir");
+            ContentDownloader.Config.MigrateDepotInstalls = HasParameter(args, "-migrate-depot");
 
             ContentDownloader.Config.VerifyAll = HasParameter(args, "-verify-all") || HasParameter(args, "-verify_all") || HasParameter(args, "-validate");
 
@@ -664,6 +665,7 @@ namespace DepotDownloader
             Console.WriteLine("  -manifestfile <file>     - Use Specified Manifest file from Steam.");
             Console.WriteLine("  -manifestdir <dir>       - Use Steam manifest files from a directory by depot and manifest id.");
             Console.WriteLine("  -appmanifest             - Generate a minimal Steam appmanifest ACF metadata file.");
+            Console.WriteLine("  -migrate-depot           - migrate matching depot-mode installs to Steam-layout without prompting.");
             Console.WriteLine("  -appmanifestfile <file>  - Write generated appmanifest ACF to a specific file.");
             Console.WriteLine("  -apptoken <#>            - Use Specified App Access Token.");
             Console.WriteLine("  -packagetoken <#>        - Use Specified Package Access Token.");

@@ -45,5 +45,6 @@ namespace DepotDownloader
         public Dictionary<uint, ulong> LuaAppTokens { get; set; }
         public bool BatchLuaDownload { get; set; }
         public bool HasExplicitDepots { get; set; }
+        public bool MigrateDepotInstalls { get; set; }
     }
 }
