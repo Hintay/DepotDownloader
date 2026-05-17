@@ -11,6 +11,9 @@ using Xunit;
 
 namespace DepotDownloader.Tests
 {
+    // DepotConfigStore is a process-global singleton; tests touching it must run serialized
+    // to avoid "Config already loaded" races when xUnit parallelizes different test classes.
+    [Collection("DepotConfigStoreSingleton")]
     public class DepotMigrationDetectTests : IDisposable
     {
         readonly string scratch;

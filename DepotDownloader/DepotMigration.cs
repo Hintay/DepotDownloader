@@ -120,6 +120,91 @@ namespace DepotDownloader
 
         public static void Apply(MigrationCandidate candidate)
         {
+            // Move every direct child of SourceDir into TargetDir, except the .DepotDownloader/ subdirectory.
+            Directory.CreateDirectory(candidate.TargetDir);
+            foreach (var entry in Directory.GetFileSystemEntries(candidate.SourceDir))
+            {
+                var name = Path.GetFileName(entry);
+                if (string.Equals(name, CONFIG_DIR_NAME, System.StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                var target = Path.Combine(candidate.TargetDir, name);
+                if (Directory.Exists(entry))
+                {
+                    MergeMoveDirectory(entry, target);
+                }
+                else
+                {
+                    File.Move(entry, target, overwrite: true);
+                }
+            }
+
+            // Move the manifest binary from source/.DepotDownloader/ to the app-mode .DepotDownloader/.
+            // App-mode .DepotDownloader/ lives at TargetDir's grandparent + CONFIG_DIR_NAME — but the
+            // existing app-mode convention puts depot.config at <configPath>/.DepotDownloader/, where
+            // <configPath> in Steam-layout is "steamapps". We derive the app-mode config dir from
+            // DepotConfigStore.Instance.FileName (set when LoadFromFile was called by the caller).
+            var appConfigDir = Path.GetDirectoryName(GetDepotConfigStoreFileName());
+            if (!string.IsNullOrEmpty(appConfigDir))
+            {
+                Directory.CreateDirectory(appConfigDir);
+                var sourceManifest = Path.Combine(candidate.SourceDir, CONFIG_DIR_NAME, $"{candidate.DepotId}_{candidate.ManifestId}.manifest");
+                var targetManifest = Path.Combine(appConfigDir, $"{candidate.DepotId}_{candidate.ManifestId}.manifest");
+                if (File.Exists(sourceManifest))
+                {
+                    File.Move(sourceManifest, targetManifest, overwrite: true);
+                }
+            }
+
+            // Update app-mode DepotConfigStore.Instance.
+            DepotConfigStore.Instance.InstalledManifestIDs[candidate.DepotId] = candidate.ManifestId;
+            DepotConfigStore.Save();
+
+            // Delete the now-empty source directory.
+            Directory.Delete(candidate.SourceDir, recursive: true);
+
+            // If ./depots/<depotId>/ is now empty (no other build-id subdirs), delete it too.
+            var depotParent = Path.GetDirectoryName(candidate.SourceDir);
+            if (!string.IsNullOrEmpty(depotParent) && Directory.Exists(depotParent))
+            {
+                if (Directory.GetFileSystemEntries(depotParent).Length == 0)
+                {
+                    Directory.Delete(depotParent);
+                }
+            }
+        }
+
+        // Recursive merge-move: moves source's children into target, creating target subdirs
+        // as needed, overwriting target files on conflict.
+        static void MergeMoveDirectory(string source, string target)
+        {
+            Directory.CreateDirectory(target);
+            foreach (var entry in Directory.GetFileSystemEntries(source))
+            {
+                var name = Path.GetFileName(entry);
+                var dest = Path.Combine(target, name);
+                if (Directory.Exists(entry))
+                {
+                    MergeMoveDirectory(entry, dest);
+                }
+                else
+                {
+                    File.Move(entry, dest, overwrite: true);
+                }
+            }
+            Directory.Delete(source, recursive: false);  // source is now empty (children moved)
+        }
+
+        // DepotConfigStore.FileName is a private string field; we read it via reflection because
+        // the public surface doesn't expose it. The caller (DownloadAppAsync) is expected to have
+        // called DepotConfigStore.LoadFromFile() with the app-mode path, so this returns that.
+        static string GetDepotConfigStoreFileName()
+        {
+            var field = typeof(DepotConfigStore).GetField("FileName",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            return (string)field.GetValue(DepotConfigStore.Instance);
         }
 
         public static void MaybeMigrate(
