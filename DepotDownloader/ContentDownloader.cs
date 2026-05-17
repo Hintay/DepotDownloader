@@ -1401,11 +1401,13 @@ namespace DepotDownloader
                     downloadCounter.completeDownloadSize += file.TotalSize;
                     depotCounter.completeDownloadSize += file.TotalSize;
 
-                    // Pre-register existing files so the verify progress bar's total is known
-                    // upfront and doesn't grow (causing the percentage to jump backward).
+                    // Pre-register only the chunks that will actually be verified so the
+                    // verify row stays hidden when validation can be skipped.
                     if (File.Exists(fileFinalPath))
                     {
-                        downloadCounter.RegisterVerifyWork(file.TotalSize, file.Chunks.Count);
+                        var oldManifestFile = oldManifest?.Files.SingleOrDefault(f => f.FileName == file.FileName);
+                        var (verifyBytes, verifyChunks) = GetVerifyWorkForExistingFile(file, oldManifestFile);
+                        downloadCounter.RegisterVerifyWork(verifyBytes, verifyChunks);
                     }
                 }
             });
@@ -1420,6 +1422,38 @@ namespace DepotDownloader
                 filteredFiles = filesAfterExclusions,
                 allFileNames = allFileNames
             };
+        }
+
+        private static (ulong bytes, int chunks) GetVerifyWorkForExistingFile(
+            DepotManifest.FileData file,
+            DepotManifest.FileData oldManifestFile)
+        {
+            if (oldManifestFile == null)
+            {
+                return (file.TotalSize, file.Chunks.Count);
+            }
+
+            if (!Config.VerifyAll && oldManifestFile.FileHash.SequenceEqual(file.FileHash))
+            {
+                return (0, 0);
+            }
+
+            ulong bytes = 0;
+            var chunks = 0;
+
+            foreach (var chunk in file.Chunks)
+            {
+                var oldChunk = oldManifestFile.Chunks.FirstOrDefault(c => c.ChunkID.SequenceEqual(chunk.ChunkID));
+                if (oldChunk == null)
+                {
+                    continue;
+                }
+
+                bytes += oldChunk.UncompressedLength;
+                chunks++;
+            }
+
+            return (bytes, chunks);
         }
 
         private static async Task DownloadSteam3AsyncDepotFiles(CancellationTokenSource cts,
