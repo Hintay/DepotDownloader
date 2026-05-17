@@ -15,6 +15,7 @@ namespace DepotDownloader
         public sealed class LuaDepotData
         {
             public Dictionary<uint, ulong> ManifestIds { get; } = [];
+            public Dictionary<uint, ulong> AppTokens { get; } = [];
         }
 
         public static void AddAll(string[] values)
@@ -56,6 +57,37 @@ namespace DepotDownloader
 
                 return DynValue.Nil;
             }));
+
+            script.Globals["addtoken"] = CallbackFunction.FromDelegate(script, new Func<ScriptExecutionContext, CallbackArguments, DynValue>((context, args) =>
+            {
+                if (TryGetUInt32(args, 0, out var appId) && TryGetUInt64(args, 1, out var token))
+                {
+                    data.AppTokens[appId] = token;
+                }
+
+                return DynValue.Nil;
+            }));
+
+            // Map any unknown global to a no-op callback so unsupported helper
+            // calls in third-party manifest scripts (addchunkid, setappinstalldir,
+            // case-variant names, etc.) don't abort the script with
+            // "attempt to call a nil value" and lose every entry that follows.
+            // Each unknown name is reported once when actually invoked.
+            var reportedMissing = new HashSet<string>();
+            var meta = new Table(script);
+            meta["__index"] = CallbackFunction.FromDelegate(script, new Func<ScriptExecutionContext, CallbackArguments, DynValue>((context, args) =>
+            {
+                var name = args.Count >= 2 && args[1].Type == DataType.String ? args[1].String : null;
+                return DynValue.NewCallback((ctx, callArgs) =>
+                {
+                    if (name != null && reportedMissing.Add(name))
+                    {
+                        Console.WriteLine("Warning: Lua function '{0}' is not supported and will be ignored.", name);
+                    }
+                    return DynValue.Nil;
+                });
+            }));
+            script.Globals.MetaTable = meta;
 
             script.DoString(lua);
 

@@ -621,6 +621,28 @@ namespace DepotDownloader
                 }
             }
 
+            // When batch-downloading via Lua, skip depots that the main app's PICS lists
+            // with depotfromapp pointing at a different app (typical for VC++ / DirectX
+            // redists provided by app 228980 "Steamworks Common Redistributables").
+            // DLC depots aren't in the main app's PICS at all, so they pass through.
+            if (Config.BatchLuaDownload && !isUgc && depots != null)
+            {
+                depotManifestIds = depotManifestIds.Where(entry =>
+                {
+                    var depotChild = depots[entry.depotId.ToString()];
+                    if (depotChild == KeyValue.Invalid) return true;
+                    var fromAppKv = depotChild["depotfromapp"];
+                    if (fromAppKv == KeyValue.Invalid) return true;
+                    var fromApp = fromAppKv.AsUnsignedInteger();
+                    if (fromApp != appId)
+                    {
+                        Console.WriteLine("Skipping shared depot {0} (provided by app {1})", entry.depotId, fromApp);
+                        return false;
+                    }
+                    return true;
+                }).ToList();
+            }
+
             var infos = new List<DepotDownloadInfo>();
 
             foreach (var (depotId, manifestId) in depotManifestIds)
@@ -1458,7 +1480,7 @@ namespace DepotDownloader
                     }
                     catch (TaskCanceledException)
                     {
-                        Console.WriteLine("Connection timeout downloading chunk {0}", chunkID);
+                        downloadCounter.Log("Connection timeout downloading chunk {0}", chunkID);
                         cdnPool.ReturnBrokenConnection(connection);
                     }
                     catch (SteamKitWebRequestException e)
@@ -1479,11 +1501,11 @@ namespace DepotDownloader
 
                         if (e.StatusCode == HttpStatusCode.Unauthorized || e.StatusCode == HttpStatusCode.Forbidden)
                         {
-                            Console.WriteLine("Encountered {1} for chunk {0}. Aborting.", chunkID, (int)e.StatusCode);
+                            downloadCounter.Log("Encountered {1} for chunk {0}. Aborting.", chunkID, (int)e.StatusCode);
                             break;
                         }
 
-                        Console.WriteLine("Encountered error downloading chunk {0}: {1}", chunkID, e.StatusCode);
+                        downloadCounter.Log("Encountered error downloading chunk {0}: {1}", chunkID, e.StatusCode);
                     }
                     catch (OperationCanceledException)
                     {
@@ -1492,13 +1514,13 @@ namespace DepotDownloader
                     catch (Exception e)
                     {
                         cdnPool.ReturnBrokenConnection(connection);
-                        Console.WriteLine("Encountered unexpected error downloading chunk {0}: {1}", chunkID, e.Message);
+                        downloadCounter.Log("Encountered unexpected error downloading chunk {0}: {1}", chunkID, e.Message);
                     }
                 } while (written == 0);
 
                 if (written == 0)
                 {
-                    Console.WriteLine("Failed to find any server with chunk {0} for depot {1}. Aborting.", chunkID, depot.DepotId);
+                    downloadCounter.Log("Failed to find any server with chunk {0} for depot {1}. Aborting.", chunkID, depot.DepotId);
                     cts.Cancel();
                 }
 

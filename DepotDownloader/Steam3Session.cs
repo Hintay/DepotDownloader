@@ -83,7 +83,7 @@ namespace DepotDownloader
             this.callbacks.Subscribe<SteamUser.LoggedOnCallback>(LogOnCallback);
             this.callbacks.Subscribe<SteamApps.LicenseListCallback>(LicenseListCallback);
 
-            Console.Write("Connecting to Steam3...");
+            Ansi.LogWrite("Connecting to Steam3...");
             Connect();
         }
 
@@ -145,9 +145,13 @@ namespace DepotDownloader
             if ((AppInfo.ContainsKey(appId) && !bForce) || bAborted)
                 return;
 
+            ulong luaToken = 0;
+            var hasLuaToken = ContentDownloader.Config.LuaAppTokens != null
+                && ContentDownloader.Config.LuaAppTokens.TryGetValue(appId, out luaToken);
+
             var appTokens = await steamApps.PICSGetAccessTokens([appId], []);
 
-            if (appTokens.AppTokensDenied.Contains(appId))
+            if (appTokens.AppTokensDenied.Contains(appId) && !hasLuaToken)
             {
                 Console.WriteLine("Insufficient privileges to get access token for app {0}", appId);
             }
@@ -155,6 +159,13 @@ namespace DepotDownloader
             foreach (var token_dict in appTokens.AppTokens)
             {
                 this.AppTokens[token_dict.Key] = token_dict.Value;
+            }
+
+            // Lua-provided tokens win over PICS so restricted DLCs listed in the
+            // Lua file can still resolve when Steam denies the access request.
+            if (hasLuaToken)
+            {
+                this.AppTokens[appId] = luaToken;
             }
 
             var request = new SteamApps.PICSRequest(appId);
@@ -254,7 +265,7 @@ namespace DepotDownloader
 
             var depotKey = await steamApps.GetDepotDecryptionKey(depotId, appid);
 
-            Console.WriteLine("Got depot key for {0} result: {1}", depotKey.DepotID, depotKey.Result);
+            Ansi.LogLine("Got depot key for {0} result: {1}", depotKey.DepotID, depotKey.Result);
 
             if (depotKey.Result != EResult.OK)
             {
@@ -274,16 +285,16 @@ namespace DepotDownloader
 
             if (requestCode == 0)
             {
-                Console.WriteLine($"No manifest request code was returned for depot {depotId} from app {appId}, manifest {manifestId}");
+                Ansi.LogLine($"No manifest request code was returned for depot {depotId} from app {appId}, manifest {manifestId}");
 
                 if (!authenticatedUser)
                 {
-                    Console.WriteLine("Suggestion: Try logging in with -username as old manifests may not be available for anonymous accounts.");
+                    Ansi.LogLine("Suggestion: Try logging in with -username as old manifests may not be available for anonymous accounts.");
                 }
             }
             else
             {
-                Console.WriteLine($"Got manifest request code for depot {depotId} from app {appId}, manifest {manifestId}, result: {requestCode}");
+                Ansi.LogLine($"Got manifest request code for depot {depotId} from app {appId}, manifest {manifestId}, result: {requestCode}");
             }
 
             return requestCode;
@@ -303,7 +314,7 @@ namespace DepotDownloader
 
             var cdnAuth = await steamContent.GetCDNAuthToken(appid, depotid, server.Host);
 
-            Console.WriteLine($"Got CDN auth token for {server.Host} result: {cdnAuth.Result} (expires {cdnAuth.Expiration})");
+            Ansi.LogLine($"Got CDN auth token for {server.Host} result: {cdnAuth.Result} (expires {cdnAuth.Expiration})");
 
             if (cdnAuth.Result != EResult.OK)
             {
@@ -317,7 +328,7 @@ namespace DepotDownloader
         {
             var appPassword = await steamApps.CheckAppBetaPassword(appid, password);
 
-            Console.WriteLine("Retrieved {0} beta keys with result: {1}", appPassword.BetaPasswords.Count, appPassword.Result);
+            Ansi.LogLine("Retrieved {0} beta keys with result: {1}", appPassword.BetaPasswords.Count, appPassword.Result);
 
             foreach (var entry in appPassword.BetaPasswords)
             {
@@ -341,7 +352,7 @@ namespace DepotDownloader
 
             var privateBeta = await steamApps.PICSGetPrivateBeta(appid, accessToken, branch, branchPassword);
 
-            Console.WriteLine($"Retrieved private beta depot section for {appid} with result: {privateBeta.Result}");
+            Ansi.LogLine($"Retrieved private beta depot section for {appid} with result: {privateBeta.Result}");
 
             return privateBeta.DepotSection;
         }
@@ -435,7 +446,7 @@ namespace DepotDownloader
 
         private async void ConnectedCallback(SteamClient.ConnectedCallback connected)
         {
-            Console.WriteLine(" Done!");
+            Ansi.LogLine(" Done!");
             bConnecting = false;
 
             // Update our tracking so that we don't time out, even if we need to reconnect multiple times,
@@ -444,14 +455,14 @@ namespace DepotDownloader
 
             if (!authenticatedUser)
             {
-                Console.Write("Logging anonymously into Steam3...");
+                Ansi.LogWrite("Logging anonymously into Steam3...");
                 steamUser.LogOnAnonymous();
             }
             else
             {
                 if (logonDetails.Username != null)
                 {
-                    Console.WriteLine("Logging '{0}' into Steam3...", logonDetails.Username);
+                    Ansi.LogLine("Logging '{0}' into Steam3...", logonDetails.Username);
                 }
 
                 if (authSession is null)
@@ -484,7 +495,7 @@ namespace DepotDownloader
                     }
                     else if (logonDetails.AccessToken is null && ContentDownloader.Config.UseQrCode)
                     {
-                        Console.WriteLine("Logging in with QR code...");
+                        Ansi.LogLine("Logging in with QR code...");
 
                         try
                         {
@@ -499,8 +510,8 @@ namespace DepotDownloader
                             // Steam will periodically refresh the challenge url, so we need a new QR code.
                             session.ChallengeURLChanged = () =>
                             {
-                                Console.WriteLine();
-                                Console.WriteLine("The QR code has changed:");
+                                Ansi.LogLine(string.Empty);
+                                Ansi.LogLine("The QR code has changed:");
 
                                 DisplayQrCode(session.ChallengeURL);
                             };
@@ -537,7 +548,7 @@ namespace DepotDownloader
 
                             if (ContentDownloader.Config.UseQrCode)
                             {
-                                Console.WriteLine($"Success! Next time you can login with -username {result.AccountName} -remember-password instead of -qr.");
+                                Ansi.LogLine($"Success! Next time you can login with -username {result.AccountName} -remember-password instead of -qr.");
                             }
                         }
                         else
@@ -575,14 +586,14 @@ namespace DepotDownloader
             // When recovering the connection, we want to reconnect even if the remote disconnects us
             if (!bIsConnectionRecovery && (disconnected.UserInitiated || bExpectingDisconnectRemote))
             {
-                Console.WriteLine("Disconnected from Steam");
+                Ansi.LogLine("Disconnected from Steam");
 
                 // Any operations outstanding need to be aborted
                 bAborted = true;
             }
             else if (connectionBackoff >= 10)
             {
-                Console.WriteLine("Could not connect to Steam after 10 tries");
+                Ansi.LogLine("Could not connect to Steam after 10 tries");
                 Abort(false);
             }
             else if (!bAborted)
@@ -591,11 +602,11 @@ namespace DepotDownloader
 
                 if (bConnecting)
                 {
-                    Console.WriteLine($"Connection to Steam failed. Trying again (#{connectionBackoff})...");
+                    Ansi.LogLine($"Connection to Steam failed. Trying again (#{connectionBackoff})...");
                 }
                 else
                 {
-                    Console.WriteLine("Lost connection to Steam. Reconnecting");
+                    Ansi.LogLine("Lost connection to Steam. Reconnecting");
                 }
 
                 Thread.Sleep(1000 * connectionBackoff);
@@ -624,7 +635,7 @@ namespace DepotDownloader
 
                 if (!isAccessToken)
                 {
-                    Console.WriteLine("This account is protected by Steam Guard.");
+                    Ansi.LogLine("This account is protected by Steam Guard.");
                 }
 
                 if (is2FA)
@@ -641,7 +652,7 @@ namespace DepotDownloader
                     AccountSettingsStore.Save();
 
                     // TODO: Handle gracefully by falling back to password prompt?
-                    Console.WriteLine($"Access token was rejected ({loggedOn.Result}).");
+                    Ansi.LogLine($"Access token was rejected ({loggedOn.Result}).");
                     Abort(false);
                     return;
                 }
@@ -654,7 +665,7 @@ namespace DepotDownloader
                     } while (string.Empty == logonDetails.AuthCode);
                 }
 
-                Console.Write("Retrying Steam3 connection...");
+                Ansi.LogWrite("Retrying Steam3 connection...");
                 Connect();
 
                 return;
@@ -662,7 +673,7 @@ namespace DepotDownloader
 
             if (loggedOn.Result == EResult.TryAnotherCM)
             {
-                Console.Write("Retrying Steam3 connection (TryAnotherCM)...");
+                Ansi.LogWrite("Retrying Steam3 connection (TryAnotherCM)...");
 
                 Reconnect();
 
@@ -671,7 +682,7 @@ namespace DepotDownloader
 
             if (loggedOn.Result == EResult.ServiceUnavailable)
             {
-                Console.WriteLine("Unable to login to Steam3: {0}", loggedOn.Result);
+                Ansi.LogLine("Unable to login to Steam3: {0}", loggedOn.Result);
                 Abort(false);
 
                 return;
@@ -679,20 +690,20 @@ namespace DepotDownloader
 
             if (loggedOn.Result != EResult.OK)
             {
-                Console.WriteLine("Unable to login to Steam3: {0}", loggedOn.Result);
+                Ansi.LogLine("Unable to login to Steam3: {0}", loggedOn.Result);
                 Abort();
 
                 return;
             }
 
-            Console.WriteLine(" Done!");
+            Ansi.LogLine(" Done!");
 
             this.seq++;
             IsLoggedOn = true;
 
             if (ContentDownloader.Config.CellID == 0)
             {
-                Console.WriteLine("Using Steam3 suggested CellID: " + loggedOn.CellID);
+                Ansi.LogLine("Using Steam3 suggested CellID: " + loggedOn.CellID);
                 ContentDownloader.Config.CellID = (int)loggedOn.CellID;
             }
         }
@@ -701,13 +712,13 @@ namespace DepotDownloader
         {
             if (licenseList.Result != EResult.OK)
             {
-                Console.WriteLine("Unable to get license list: {0} ", licenseList.Result);
+                Ansi.LogLine("Unable to get license list: {0} ", licenseList.Result);
                 Abort();
 
                 return;
             }
 
-            Console.WriteLine("Got {0} licenses for account!", licenseList.LicenseList.Count);
+            Ansi.LogLine("Got {0} licenses for account!", licenseList.LicenseList.Count);
             Licenses = licenseList.LicenseList;
 
             foreach (var license in licenseList.LicenseList)
@@ -727,11 +738,11 @@ namespace DepotDownloader
             using var qrCode = new AsciiQRCode(qrCodeData);
             var qrCodeAsAsciiArt = qrCode.GetLineByLineGraphic(1, drawQuietZones: true);
 
-            Console.WriteLine("Use the Steam Mobile App to sign in with this QR code:");
+            Ansi.LogLine("Use the Steam Mobile App to sign in with this QR code:");
 
             foreach (var line in qrCodeAsAsciiArt)
             {
-                Console.WriteLine(line);
+                Ansi.LogLine(line);
             }
         }
     }

@@ -65,7 +65,7 @@ namespace DepotDownloader
                 DebugLog.Enabled = true;
                 DebugLog.AddListener((category, message) =>
                 {
-                    Console.WriteLine("[{0}] {1}", category, message);
+                    Ansi.LogLine("[{0}] {1}", category, message);
                 });
 
                 var httpEventListener = new HttpDiagnosticEventListener();
@@ -169,6 +169,7 @@ namespace DepotDownloader
             ContentDownloader.Config.UseLuaFile = HasParameter(args, "-lua");
             ContentDownloader.Config.LuaFile = GetOptionalParameter(args, "-lua");
             ContentDownloader.Config.LuaManifestIds = [];
+            ContentDownloader.Config.LuaAppTokens = [];
 
             ContentDownloader.Config.InstallDirectory = GetParameter<string>(args, "-dir");
 
@@ -248,6 +249,7 @@ namespace DepotDownloader
                     var lua = File.ReadAllText(ContentDownloader.Config.LuaFile);
                     var luaDepotData = DepotKeyStore.AddFromLua(lua);
                     ContentDownloader.Config.LuaManifestIds = luaDepotData.ManifestIds;
+                    ContentDownloader.Config.LuaAppTokens = luaDepotData.AppTokens;
 
                     Console.WriteLine("Using Lua file: '{0}'.", ContentDownloader.Config.LuaFile);
                 }
@@ -407,6 +409,7 @@ namespace DepotDownloader
                 else if (ContentDownloader.Config.LuaManifestIds != null && ContentDownloader.Config.LuaManifestIds.Count > 0)
                 {
                     depotManifestIds.AddRange(ContentDownloader.Config.LuaManifestIds.Select(x => (x.Key, x.Value)));
+                    ContentDownloader.Config.BatchLuaDownload = true;
                 }
                 else
                 {

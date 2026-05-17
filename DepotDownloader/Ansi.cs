@@ -81,6 +81,35 @@ static class Ansi
         Console.Write($"{ESC}]9;4;{(byte)state};{progress}{BEL}");
     }
 
+    // Routes through AnsiConsole when interactive so writes interleave correctly
+    // with a live Progress display instead of corrupting the bar; falls back to
+    // plain Console when output is redirected or the terminal lacks ANSI support.
+    public static void LogLine(string format, params object[] args)
+    {
+        var message = args == null || args.Length == 0 ? format : string.Format(format, args);
+        if (useProgress)
+        {
+            AnsiConsole.WriteLine(message);
+        }
+        else
+        {
+            Console.WriteLine(message);
+        }
+    }
+
+    public static void LogWrite(string format, params object[] args)
+    {
+        var message = args == null || args.Length == 0 ? format : string.Format(format, args);
+        if (useProgress)
+        {
+            AnsiConsole.Write(message);
+        }
+        else
+        {
+            Console.Write(message);
+        }
+    }
+
     public static async Task RunWithProgressAsync(GlobalDownloadCounter counter, Func<Task> action)
     {
         await AnsiConsole.Progress()
@@ -285,15 +314,7 @@ class GlobalDownloadCounter
 
     public void Log(string format, params object[] args)
     {
-        var message = string.Format(format, args);
-
-        if (!useInteractiveOutput)
-        {
-            Console.WriteLine(message);
-            return;
-        }
-
-        AnsiConsole.WriteLine(message);
+        Ansi.LogLine(format, args);
     }
 
     public void InteractiveLog(string format, params object[] args)

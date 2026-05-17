@@ -39,7 +39,7 @@ namespace DepotDownloader
             }
 
             sb.Append(')');
-            Console.WriteLine(sb.ToString());
+            Ansi.LogLine(sb.ToString());
         }
     }
 }
