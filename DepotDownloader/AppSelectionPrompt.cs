@@ -87,7 +87,86 @@ namespace DepotDownloader
             string language,
             bool allLanguages)
         {
-            return new List<uint>();
+            var result = new List<uint>();
+            if (mainAppDepots == null || mainAppDepots == KeyValue.Invalid)
+            {
+                return result;
+            }
+
+            foreach (var depotSection in mainAppDepots.Children)
+            {
+                if (!uint.TryParse(depotSection.Name, out var depotId))
+                {
+                    continue;
+                }
+
+                // Filter out shared depots (pointing at a different app).
+                var depotFromApp = depotSection["depotfromapp"];
+                if (depotFromApp != KeyValue.Invalid)
+                {
+                    var fromApp = depotFromApp.AsUnsignedInteger();
+                    if (fromApp != 0 && fromApp != appId)
+                    {
+                        continue;
+                    }
+                }
+
+                // Apply platform filter (mirrors ContentDownloader.cs depot-loop filter).
+                var cfg = depotSection["config"];
+                if (cfg != KeyValue.Invalid)
+                {
+                    if (!allPlatforms)
+                    {
+                        var oslist = cfg["oslist"];
+                        if (oslist != KeyValue.Invalid && !string.IsNullOrWhiteSpace(oslist.Value))
+                        {
+                            var arr = oslist.Value.Split(',');
+                            var hit = false;
+                            foreach (var v in arr)
+                            {
+                                if (string.Equals(v.Trim(), os, System.StringComparison.Ordinal))
+                                {
+                                    hit = true;
+                                    break;
+                                }
+                            }
+                            if (!hit)
+                            {
+                                continue;
+                            }
+                        }
+                    }
+
+                    if (!allArchs)
+                    {
+                        var osarch = cfg["osarch"];
+                        if (osarch != KeyValue.Invalid && !string.IsNullOrWhiteSpace(osarch.Value))
+                        {
+                            if (!string.Equals(osarch.Value.Trim(), arch, System.StringComparison.Ordinal))
+                            {
+                                continue;
+                            }
+                        }
+                    }
+
+                    if (!allLanguages)
+                    {
+                        var langKv = cfg["language"];
+                        if (langKv != KeyValue.Invalid && !string.IsNullOrWhiteSpace(langKv.Value))
+                        {
+                            if (!string.Equals(langKv.Value.Trim(), language, System.StringComparison.Ordinal))
+                            {
+                                continue;
+                            }
+                        }
+                    }
+                }
+                // Depot with no `config` block at all is platform-agnostic — kept unconditionally.
+
+                result.Add(depotId);
+            }
+
+            return result;
         }
 
         public static PlatformSelection PromptPlatform(KeyValue mainAppDepots)
@@ -170,7 +249,49 @@ namespace DepotDownloader
             IReadOnlyList<uint> candidates,
             KeyValue mainAppDepots)
         {
-            return candidates;
+            if (candidates.Count <= 1)
+            {
+                return candidates;
+            }
+
+            System.Console.Write("The app has {0} main depots. Customize selection? [y/N]: ", candidates.Count);
+            var input = (System.Console.ReadLine() ?? string.Empty).Trim().ToLowerInvariant();
+            if (input != "y" && input != "yes")
+            {
+                return candidates;
+            }
+
+            var prompt = new MultiSelectionPrompt<uint>()
+                .Title("Select main depots to install (default: all):")
+                .NotRequired()
+                .PageSize(15)
+                .InstructionsText("[grey](Press [blue]<space>[/] to toggle, [green]<enter>[/] to confirm)[/]")
+                .UseConverter(id => FormatMainDepotForDisplay(id, mainAppDepots));
+
+            foreach (var id in candidates)
+            {
+                prompt.AddChoice(id).Select();
+            }
+
+            return AnsiConsole.Prompt(prompt);
+        }
+
+        static string FormatMainDepotForDisplay(uint depotId, KeyValue mainAppDepots)
+        {
+            var section = mainAppDepots[depotId.ToString()];
+            if (section == KeyValue.Invalid)
+            {
+                return $"depot {depotId}";
+            }
+
+            var name = section["name"].AsString() ?? string.Empty;
+            var osQualifier = section["config"]["oslist"].AsString() ?? "any";
+
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                return $"depot {depotId}  ({osQualifier})";
+            }
+            return $"depot {depotId}  {name}  ({osQualifier})";
         }
 
         public static IReadOnlyList<uint> PromptDlcs(IReadOnlyList<uint> dlcAppIds)

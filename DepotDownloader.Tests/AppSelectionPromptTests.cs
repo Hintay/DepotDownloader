@@ -122,17 +122,116 @@ namespace DepotDownloader.Tests
             Assert.Empty(language);
         }
 
+        // --- ComputeMainDepotCandidates ---
+
+        [Fact]
+        public void ComputeMainDepotCandidates_NoDepotFromApp_IsKept()
+        {
+            var depots = new KeyValue("depots");
+            depots.Children.Add(BuildDepotKv("601151", oslist: "windows"));
+
+            var result = AppSelectionPrompt.ComputeMainDepotCandidates(
+                depots, appId: 601150u, os: "windows", allPlatforms: false,
+                arch: "64", allArchs: false, language: "english", allLanguages: false);
+
+            Assert.Contains(601151u, result);
+        }
+
+        [Fact]
+        public void ComputeMainDepotCandidates_DepotFromAppEqualsMain_IsKept()
+        {
+            var depots = new KeyValue("depots");
+            depots.Children.Add(BuildDepotKv("601151", oslist: "windows", depotFromApp: 601150));
+
+            var result = AppSelectionPrompt.ComputeMainDepotCandidates(
+                depots, appId: 601150u, os: "windows", allPlatforms: false,
+                arch: "64", allArchs: false, language: "english", allLanguages: false);
+
+            Assert.Contains(601151u, result);
+        }
+
+        [Fact]
+        public void ComputeMainDepotCandidates_SharedDepotFromOtherApp_IsExcluded()
+        {
+            var depots = new KeyValue("depots");
+            depots.Children.Add(BuildDepotKv("228987", oslist: "windows", depotFromApp: 228980));
+
+            var result = AppSelectionPrompt.ComputeMainDepotCandidates(
+                depots, appId: 601150u, os: "windows", allPlatforms: false,
+                arch: "64", allArchs: false, language: "english", allLanguages: false);
+
+            Assert.DoesNotContain(228987u, result);
+        }
+
+        [Fact]
+        public void ComputeMainDepotCandidates_PlatformMismatch_IsExcluded()
+        {
+            var depots = new KeyValue("depots");
+            depots.Children.Add(BuildDepotKv("601151", oslist: "macos"));
+
+            var result = AppSelectionPrompt.ComputeMainDepotCandidates(
+                depots, appId: 601150u, os: "windows", allPlatforms: false,
+                arch: "64", allArchs: false, language: "english", allLanguages: false);
+
+            Assert.DoesNotContain(601151u, result);
+        }
+
+        [Fact]
+        public void ComputeMainDepotCandidates_AllPlatformsTrue_IgnoresOsList()
+        {
+            var depots = new KeyValue("depots");
+            depots.Children.Add(BuildDepotKv("601151", oslist: "macos"));
+
+            var result = AppSelectionPrompt.ComputeMainDepotCandidates(
+                depots, appId: 601150u, os: "windows", allPlatforms: true,
+                arch: "64", allArchs: false, language: "english", allLanguages: false);
+
+            Assert.Contains(601151u, result);
+        }
+
+        [Fact]
+        public void ComputeMainDepotCandidates_NoConfigBlock_TreatedAsPlatformAgnostic()
+        {
+            var depots = new KeyValue("depots");
+            var bare = new KeyValue("601151");
+            depots.Children.Add(bare);
+
+            var result = AppSelectionPrompt.ComputeMainDepotCandidates(
+                depots, appId: 601150u, os: "windows", allPlatforms: false,
+                arch: "64", allArchs: false, language: "english", allLanguages: false);
+
+            Assert.Contains(601151u, result);
+        }
+
+        [Fact]
+        public void ComputeMainDepotCandidates_ArchAndLanguageMismatch_IsExcluded()
+        {
+            var depots = new KeyValue("depots");
+            depots.Children.Add(BuildDepotKv("601151", oslist: "windows", osarch: "32", language: "schinese"));
+
+            var result = AppSelectionPrompt.ComputeMainDepotCandidates(
+                depots, appId: 601150u, os: "windows", allPlatforms: false,
+                arch: "64", allArchs: false, language: "english", allLanguages: false);
+
+            Assert.DoesNotContain(601151u, result);
+        }
+
         // Helper: build a depot KV node like PICS would return:
         // "601151" {
+        //   "depotfromapp" "601150"    (optional)
         //   "config" {
         //     "oslist"   "windows"
         //     "osarch"   "64"
         //     "language" "english"
         //   }
         // }
-        static KeyValue BuildDepotKv(string depotIdName, string oslist = null, string osarch = null, string language = null)
+        static KeyValue BuildDepotKv(string depotIdName, string oslist = null, string osarch = null, string language = null, uint depotFromApp = 0)
         {
             var kv = new KeyValue(depotIdName);
+            if (depotFromApp != 0)
+            {
+                kv.Children.Add(new KeyValue("depotfromapp", depotFromApp.ToString()));
+            }
             var cfg = new KeyValue("config");
             if (oslist != null)   cfg.Children.Add(new KeyValue("oslist", oslist));
             if (osarch != null)   cfg.Children.Add(new KeyValue("osarch", osarch));
