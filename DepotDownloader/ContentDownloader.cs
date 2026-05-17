@@ -589,6 +589,7 @@ namespace DepotDownloader
             var acfPath = ResolveAppManifestPath();
             var installed = AppManifestReader.TryReadFromFile(acfPath);
             var appName = GetAppName(appId);
+            var common = GetSteam3AppSection(appId, EAppInfoSection.Common);
 
             var skipInteractivePrompts =
                 installed != null && installed.StateFlags != InstalledAppManifest.StateFullyInstalled;
@@ -601,7 +602,7 @@ namespace DepotDownloader
                 && !skipInteractivePrompts
                 && depots != null)
             {
-                var platformSel = AppSelectionPrompt.PromptPlatform(depots);
+                var platformSel = AppSelectionPrompt.PromptPlatform(depots, common);
 
                 if (platformSel.AllPlatforms)
                 {
@@ -674,10 +675,12 @@ namespace DepotDownloader
                 && Config.BatchLuaDownload
                 && Config.LuaOwnedApps != null)
             {
-                var dlcCandidates = Config.LuaOwnedApps
-                    .Where(id => id != appId)
-                    .OrderBy(id => id)
-                    .ToList();
+                var extended = GetSteam3AppSection(appId, EAppInfoSection.Extended);
+                var dlcCandidates = AppSelectionPrompt.ComputeDlcCandidates(
+                    Config.LuaOwnedApps,
+                    appId,
+                    depots,
+                    extended);
 
                 if (dlcCandidates.Count > 0)
                 {
@@ -696,12 +699,13 @@ namespace DepotDownloader
                         {
                             // Drop from all four locations: Lua manifest map, token map,
                             // owned-apps set, and the working depot list. The DLC's
-                            // depot id is assumed equal to its app id (the single-depot
-                            // DLC convention used by all current Lua tooling).
+                            // depot id usually equals its app id, but Steam PICS can also
+                            // identify the owning DLC through depots.<id>.dlcappid.
                             Config.LuaManifestIds?.Remove(dlcId);
                             Config.LuaAppTokens?.Remove(dlcId);
                             Config.LuaOwnedApps.Remove(dlcId);
-                            depotManifestIds.RemoveAll(entry => entry.depotId == dlcId);
+                            depotManifestIds.RemoveAll(entry =>
+                                AppSelectionPrompt.DepotBelongsToDlc(entry.depotId, dlcId, depots));
                         }
                     }
                 }
@@ -792,22 +796,26 @@ namespace DepotDownloader
                 }
             }
 
-            // When batch-downloading via Lua, skip depots that the main app's PICS lists
-            // with depotfromapp pointing at a different app (typical for VC++ / DirectX
-            // redists provided by app 228980 "Steamworks Common Redistributables").
-            // DLC depots aren't in the main app's PICS at all, so they pass through.
+            // When batch-downloading via Lua, skip depots that Steam PICS marks as
+            // shared installs (typical VC++ / DirectX redists from app 228980) so
+            // they do not appear as selectable DLC content.
             if (Config.BatchLuaDownload && !isUgc && depots != null)
             {
                 depotManifestIds = depotManifestIds.Where(entry =>
                 {
                     var depotChild = depots[entry.depotId.ToString()];
                     if (depotChild == KeyValue.Invalid) return true;
-                    var fromAppKv = depotChild["depotfromapp"];
-                    if (fromAppKv == KeyValue.Invalid) return true;
-                    var fromApp = fromAppKv.AsUnsignedInteger();
-                    if (fromApp != appId)
+                    if (AppSelectionPrompt.IsSharedDepot(depotChild, appId))
                     {
-                        Console.WriteLine("Skipping shared depot {0} (provided by app {1})", entry.depotId, fromApp);
+                        var fromApp = depotChild["depotfromapp"].AsUnsignedInteger();
+                        if (fromApp != 0)
+                        {
+                            Console.WriteLine("Skipping shared depot {0} (provided by app {1})", entry.depotId, fromApp);
+                        }
+                        else
+                        {
+                            Console.WriteLine("Skipping shared depot {0} (sharedinstall)", entry.depotId);
+                        }
                         return false;
                     }
                     return true;

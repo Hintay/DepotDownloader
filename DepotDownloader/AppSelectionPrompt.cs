@@ -28,13 +28,25 @@ namespace DepotDownloader
             IReadOnlyList<string> Language)
         ExtractPlatformChoices(KeyValue mainAppDepots)
         {
+            return ExtractPlatformChoices(mainAppDepots, null);
+        }
+
+        public static (
+            IReadOnlyList<string> Os,
+            IReadOnlyList<string> Arch,
+            IReadOnlyList<string> Language)
+        ExtractPlatformChoices(KeyValue mainAppDepots, KeyValue mainAppCommon)
+        {
             var osSet = new SortedSet<string>(StringComparer.Ordinal);
             var archSet = new SortedSet<string>(StringComparer.Ordinal);
             var languageSet = new SortedSet<string>(StringComparer.Ordinal);
 
+            AddDepotLanguageChoices(mainAppDepots, languageSet);
+            AddCommonLanguageChoices(mainAppCommon, languageSet);
+
             if (mainAppDepots == null || mainAppDepots == KeyValue.Invalid)
             {
-                return (new List<string>(), new List<string>(), new List<string>());
+                return (new List<string>(osSet), new List<string>(archSet), new List<string>(languageSet));
             }
 
             foreach (var depotSection in mainAppDepots.Children)
@@ -74,6 +86,56 @@ namespace DepotDownloader
             return (new List<string>(osSet), new List<string>(archSet), new List<string>(languageSet));
         }
 
+        static void AddDepotLanguageChoices(KeyValue mainAppDepots, SortedSet<string> languageSet)
+        {
+            if (mainAppDepots == null || mainAppDepots == KeyValue.Invalid)
+            {
+                return;
+            }
+
+            var baseLanguages = mainAppDepots["baselanguages"];
+            if (baseLanguages == KeyValue.Invalid || string.IsNullOrWhiteSpace(baseLanguages.Value))
+            {
+                return;
+            }
+
+            foreach (var part in baseLanguages.Value.Split(','))
+            {
+                var trimmed = part.Trim();
+                if (!string.IsNullOrEmpty(trimmed))
+                {
+                    languageSet.Add(trimmed);
+                }
+            }
+        }
+
+        static void AddCommonLanguageChoices(KeyValue mainAppCommon, SortedSet<string> languageSet)
+        {
+            if (mainAppCommon == null || mainAppCommon == KeyValue.Invalid)
+            {
+                return;
+            }
+
+            AddLanguageChildNames(mainAppCommon["supported_languages"], languageSet);
+            AddLanguageChildNames(mainAppCommon["languages"], languageSet);
+        }
+
+        static void AddLanguageChildNames(KeyValue languageRoot, SortedSet<string> languageSet)
+        {
+            if (languageRoot == null || languageRoot == KeyValue.Invalid)
+            {
+                return;
+            }
+
+            foreach (var child in languageRoot.Children)
+            {
+                if (!string.IsNullOrWhiteSpace(child.Name))
+                {
+                    languageSet.Add(child.Name.Trim());
+                }
+            }
+        }
+
         // Pure helper — tested. Given the main app's PICS depots tree, the appId,
         // and the user's platform selection, returns the list of "main depot" IDs
         // that would download under those constraints (excluding shared depots
@@ -101,15 +163,17 @@ namespace DepotDownloader
                     continue;
                 }
 
-                // Filter out shared depots (pointing at a different app).
-                var depotFromApp = depotSection["depotfromapp"];
-                if (depotFromApp != KeyValue.Invalid)
+                // DLC depots are listed in the main app's PICS depots tree, but
+                // should be controlled by the DLC prompt rather than the main-depot prompt.
+                if (depotSection["dlcappid"] != KeyValue.Invalid)
                 {
-                    var fromApp = depotFromApp.AsUnsignedInteger();
-                    if (fromApp != 0 && fromApp != appId)
-                    {
-                        continue;
-                    }
+                    continue;
+                }
+
+                // Filter out shared depots according to Steam PICS metadata.
+                if (IsSharedDepot(depotSection, appId))
+                {
+                    continue;
                 }
 
                 // Apply platform filter (mirrors ContentDownloader.cs depot-loop filter).
@@ -121,6 +185,124 @@ namespace DepotDownloader
                 // Depot with no `config` block at all is platform-agnostic — kept unconditionally.
 
                 result.Add(depotId);
+            }
+
+            return result;
+        }
+
+        internal static bool IsSharedDepot(KeyValue depotSection, uint appId)
+        {
+            if (depotSection == null || depotSection == KeyValue.Invalid)
+            {
+                return false;
+            }
+
+            var sharedInstall = depotSection["sharedinstall"];
+            if (sharedInstall != KeyValue.Invalid && sharedInstall.AsUnsignedInteger() != 0)
+            {
+                return true;
+            }
+
+            var depotFromApp = depotSection["depotfromapp"];
+            if (depotFromApp == KeyValue.Invalid)
+            {
+                return false;
+            }
+
+            var fromApp = depotFromApp.AsUnsignedInteger();
+            return fromApp != 0 && fromApp != appId;
+        }
+
+        public static List<uint> ComputeDlcCandidates(
+            IEnumerable<uint> luaOwnedAppIds,
+            uint appId,
+            KeyValue mainAppDepots,
+            KeyValue mainAppExtended)
+        {
+            var result = new List<uint>();
+            if (luaOwnedAppIds == null)
+            {
+                return result;
+            }
+
+            var listedDlcAppIds = ExtractListedDlcAppIds(mainAppExtended);
+
+            foreach (var id in luaOwnedAppIds)
+            {
+                if (id == appId)
+                {
+                    continue;
+                }
+
+                if (listedDlcAppIds.Contains(id) || HasDlcDepotMarker(id, mainAppDepots))
+                {
+                    result.Add(id);
+                }
+            }
+
+            result.Sort();
+            return result;
+        }
+
+        internal static bool DepotBelongsToDlc(uint depotId, uint dlcAppId, KeyValue mainAppDepots)
+        {
+            if (depotId == dlcAppId)
+            {
+                return true;
+            }
+
+            if (mainAppDepots == null || mainAppDepots == KeyValue.Invalid)
+            {
+                return false;
+            }
+
+            var depotSection = mainAppDepots[depotId.ToString()];
+            if (depotSection == KeyValue.Invalid)
+            {
+                return false;
+            }
+
+            var dlcAppIdKv = depotSection["dlcappid"];
+            return dlcAppIdKv != KeyValue.Invalid && dlcAppIdKv.AsUnsignedInteger() == dlcAppId;
+        }
+
+        static bool HasDlcDepotMarker(uint appOrDepotId, KeyValue mainAppDepots)
+        {
+            if (mainAppDepots == null || mainAppDepots == KeyValue.Invalid)
+            {
+                return false;
+            }
+
+            var depotSection = mainAppDepots[appOrDepotId.ToString()];
+            if (depotSection == KeyValue.Invalid)
+            {
+                return false;
+            }
+
+            var dlcAppIdKv = depotSection["dlcappid"];
+            return dlcAppIdKv != KeyValue.Invalid && dlcAppIdKv.AsUnsignedInteger() == appOrDepotId;
+        }
+
+        static HashSet<uint> ExtractListedDlcAppIds(KeyValue mainAppExtended)
+        {
+            var result = new HashSet<uint>();
+            if (mainAppExtended == null || mainAppExtended == KeyValue.Invalid)
+            {
+                return result;
+            }
+
+            var listOfDlc = mainAppExtended["listofdlc"].AsString();
+            if (string.IsNullOrWhiteSpace(listOfDlc))
+            {
+                return result;
+            }
+
+            foreach (var part in listOfDlc.Split(','))
+            {
+                if (uint.TryParse(part.Trim(), out var dlcAppId))
+                {
+                    result.Add(dlcAppId);
+                }
             }
 
             return result;
@@ -196,14 +378,19 @@ namespace DepotDownloader
 
         public static PlatformSelection PromptPlatform(KeyValue mainAppDepots)
         {
-            var (osChoices, archChoices, languageChoices) = ExtractPlatformChoices(mainAppDepots);
+            return PromptPlatform(mainAppDepots, null);
+        }
+
+        public static PlatformSelection PromptPlatform(KeyValue mainAppDepots, KeyValue mainAppCommon)
+        {
+            var (osChoices, archChoices, languageChoices) = ExtractPlatformChoices(mainAppDepots, mainAppCommon);
 
             bool allPlatforms = false;
-            string osPick = null;
+            string osPick = osChoices.Count == 1 ? osChoices[0] : null;
             bool allArchs = false;
-            string archPick = null;
+            string archPick = archChoices.Count == 1 ? archChoices[0] : null;
             bool allLanguages = false;
-            string languagePick = null;
+            string languagePick = languageChoices.Count == 1 ? languageChoices[0] : null;
 
             if (osChoices.Count >= 2)
             {
@@ -211,7 +398,7 @@ namespace DepotDownloader
                 var picked = AnsiConsole.Prompt(
                     new SelectionPrompt<string>()
                         .Title("Target OS:")
-                        .PageSize(10)
+                        .PageSize(GetPromptPageSize())
                         .AddChoices(choices));
                 if (string.Equals(picked, "All platforms", StringComparison.Ordinal))
                 {
@@ -229,7 +416,7 @@ namespace DepotDownloader
                 var picked = AnsiConsole.Prompt(
                     new SelectionPrompt<string>()
                         .Title("Target architecture:")
-                        .PageSize(10)
+                        .PageSize(GetPromptPageSize())
                         .AddChoices(choices));
                 if (string.Equals(picked, "All architectures", StringComparison.Ordinal))
                 {
@@ -247,7 +434,7 @@ namespace DepotDownloader
                 var picked = AnsiConsole.Prompt(
                     new SelectionPrompt<string>()
                         .Title("Target language:")
-                        .PageSize(15)
+                        .PageSize(GetPromptPageSize())
                         .AddChoices(choices));
                 if (string.Equals(picked, "All languages", StringComparison.Ordinal))
                 {
@@ -289,7 +476,7 @@ namespace DepotDownloader
             var prompt = new MultiSelectionPrompt<uint>()
                 .Title("Select main depots to install (default: all):")
                 .NotRequired()
-                .PageSize(15)
+                .PageSize(GetPromptPageSize())
                 .InstructionsText("[grey](Press [blue]<space>[/] to toggle, [green]<enter>[/] to confirm)[/]")
                 .UseConverter(id => FormatMainDepotForDisplay(id, mainAppDepots));
 
@@ -329,7 +516,7 @@ namespace DepotDownloader
             var prompt = new MultiSelectionPrompt<uint>()
                 .Title("Select DLCs to install (default: all):")
                 .NotRequired()
-                .PageSize(15)
+                .PageSize(GetPromptPageSize())
                 .InstructionsText("[grey](Press [blue]<space>[/] to toggle, [green]<enter>[/] to confirm)[/]")
                 .UseConverter(id =>
                 {
@@ -345,6 +532,41 @@ namespace DepotDownloader
             }
 
             return AnsiConsole.Prompt(prompt);
+        }
+
+        static int GetPromptPageSize()
+        {
+            const int fallbackHeight = 24;
+            const int reservedLines = 8;
+            const int preferredMinPageSize = 10;
+            const int absoluteMinPageSize = 3;
+            const int maxPageSize = 50;
+
+            var height = GetCurrentConsoleHeight(fallbackHeight);
+            var availableLines = Math.Max(absoluteMinPageSize, height - reservedLines);
+            if (availableLines < preferredMinPageSize)
+            {
+                return availableLines;
+            }
+
+            return Math.Min(availableLines, maxPageSize);
+        }
+
+        static int GetCurrentConsoleHeight(int fallbackHeight)
+        {
+            try
+            {
+                if (!Console.IsOutputRedirected && Console.WindowHeight > 0)
+                {
+                    return Console.WindowHeight;
+                }
+            }
+            catch
+            {
+                // Some redirected or hosted terminals cannot report a live window height.
+            }
+
+            return AnsiConsole.Profile.Height > 0 ? AnsiConsole.Profile.Height : fallbackHeight;
         }
     }
 }

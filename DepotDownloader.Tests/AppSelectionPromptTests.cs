@@ -122,6 +122,32 @@ namespace DepotDownloader.Tests
             Assert.Empty(language);
         }
 
+        [Fact]
+        public void ExtractPlatformChoices_BaseLanguages_AreIncluded()
+        {
+            var depots = new KeyValue("depots");
+            depots.Children.Add(new KeyValue("baselanguages", "english,schinese,japanese"));
+
+            var (_, _, language) = AppSelectionPrompt.ExtractPlatformChoices(depots);
+
+            Assert.Equal(new[] { "english", "japanese", "schinese" }, language);
+        }
+
+        [Fact]
+        public void ExtractPlatformChoices_CommonSupportedLanguages_AreIncluded()
+        {
+            var depots = new KeyValue("depots");
+            var common = new KeyValue("common");
+            var supported = new KeyValue("supported_languages");
+            supported.Children.Add(new KeyValue("english"));
+            supported.Children.Add(new KeyValue("schinese"));
+            common.Children.Add(supported);
+
+            var (_, _, language) = AppSelectionPrompt.ExtractPlatformChoices(depots, common);
+
+            Assert.Equal(new[] { "english", "schinese" }, language);
+        }
+
         // --- ComputeMainDepotCandidates ---
 
         [Fact]
@@ -161,6 +187,29 @@ namespace DepotDownloader.Tests
                 arch: "64", allArchs: false, language: "english", allLanguages: false);
 
             Assert.DoesNotContain(228987u, result);
+        }
+
+        [Fact]
+        public void ComputeMainDepotCandidates_SharedInstall_IsExcluded()
+        {
+            var depots = new KeyValue("depots");
+            depots.Children.Add(BuildDepotKv("228990", oslist: "windows", sharedInstall: 1));
+
+            var result = AppSelectionPrompt.ComputeMainDepotCandidates(
+                depots, appId: 601150u, os: "windows", allPlatforms: false,
+                arch: "64", allArchs: false, language: "english", allLanguages: false);
+
+            Assert.DoesNotContain(228990u, result);
+        }
+
+        [Fact]
+        public void IsSharedDepot_SharedInstallNonZero_ReturnsTrue()
+        {
+            var depot = BuildDepotKv("228990", oslist: "windows", sharedInstall: 1);
+
+            var result = AppSelectionPrompt.IsSharedDepot(depot, appId: 601150u);
+
+            Assert.True(result);
         }
 
         [Fact]
@@ -304,12 +353,16 @@ namespace DepotDownloader.Tests
         //     "language" "english"
         //   }
         // }
-        static KeyValue BuildDepotKv(string depotIdName, string oslist = null, string osarch = null, string language = null, uint depotFromApp = 0)
+        static KeyValue BuildDepotKv(string depotIdName, string oslist = null, string osarch = null, string language = null, uint depotFromApp = 0, uint sharedInstall = 0)
         {
             var kv = new KeyValue(depotIdName);
             if (depotFromApp != 0)
             {
                 kv.Children.Add(new KeyValue("depotfromapp", depotFromApp.ToString()));
+            }
+            if (sharedInstall != 0)
+            {
+                kv.Children.Add(new KeyValue("sharedinstall", sharedInstall.ToString()));
             }
             var cfg = new KeyValue("config");
             if (oslist != null)   cfg.Children.Add(new KeyValue("oslist", oslist));
