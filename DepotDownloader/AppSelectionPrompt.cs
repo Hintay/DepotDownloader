@@ -28,8 +28,8 @@ namespace DepotDownloader
             IReadOnlyList<string> Language)
         ExtractPlatformChoices(KeyValue mainAppDepots)
         {
-            var osSet       = new SortedSet<string>(StringComparer.Ordinal);
-            var archSet     = new SortedSet<string>(StringComparer.Ordinal);
+            var osSet = new SortedSet<string>(StringComparer.Ordinal);
+            var archSet = new SortedSet<string>(StringComparer.Ordinal);
             var languageSet = new SortedSet<string>(StringComparer.Ordinal);
 
             if (mainAppDepots == null || mainAppDepots == KeyValue.Invalid)

@@ -840,8 +840,8 @@ namespace DepotDownloader
                     await steam3.RequestAppInfoMany(unknownParents);
                 }
 
-                var resolvedOs       = os ?? Util.GetSteamOS();
-                var resolvedArch     = arch ?? Util.GetSteamArch();
+                var resolvedOs = os ?? Util.GetSteamOS();
+                var resolvedArch = arch ?? Util.GetSteamArch();
                 var resolvedLanguage = language ?? "english";
 
                 depotManifestIds = depotManifestIds.Where(entry =>
