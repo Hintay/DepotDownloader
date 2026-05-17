@@ -4,7 +4,7 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Text;
+using SteamKit2;
 
 namespace DepotDownloader
 {
@@ -20,6 +20,7 @@ namespace DepotDownloader
         string installDir,
         uint buildId,
         string language,
+        uint stateFlags,
         IReadOnlyCollection<SteamAppManifestDepot> depots)
     {
         public uint AppId { get; } = appId;
@@ -27,6 +28,7 @@ namespace DepotDownloader
         public string InstallDir { get; } = installDir;
         public uint BuildId { get; } = buildId;
         public string Language { get; } = language;
+        public uint StateFlags { get; } = stateFlags;
         public IReadOnlyCollection<SteamAppManifestDepot> Depots { get; } = depots;
     }
 
@@ -40,83 +42,35 @@ namespace DepotDownloader
                 Directory.CreateDirectory(directory);
             }
 
-            File.WriteAllText(path, BuildContent(manifest), Encoding.UTF8);
+            var root = BuildKeyValue(manifest);
+            root.SaveToFile(path, asBinary: false);
         }
 
-        static string BuildContent(SteamAppManifest manifest)
+        static KeyValue BuildKeyValue(SteamAppManifest manifest)
         {
-            var builder = new StringBuilder();
-
-            builder.AppendLine("\"AppState\"");
-            builder.AppendLine("{");
-            AppendKeyValue(builder, 1, "appid", manifest.AppId.ToString());
-            AppendKeyValue(builder, 1, "universe", "1");
-            AppendKeyValue(builder, 1, "name", manifest.Name);
-            AppendKeyValue(builder, 1, "installdir", manifest.InstallDir);
+            var root = new KeyValue("AppState");
+            root.Children.Add(new KeyValue("appid", manifest.AppId.ToString()));
+            root.Children.Add(new KeyValue("Universe", "1"));
+            root.Children.Add(new KeyValue("StateFlags", manifest.StateFlags.ToString()));
+            root.Children.Add(new KeyValue("name", manifest.Name));
+            root.Children.Add(new KeyValue("installdir", manifest.InstallDir));
 
             if (manifest.BuildId != 0)
             {
-                AppendKeyValue(builder, 1, "buildid", manifest.BuildId.ToString());
-                AppendKeyValue(builder, 1, "TargetBuildID", manifest.BuildId.ToString());
+                root.Children.Add(new KeyValue("buildid", manifest.BuildId.ToString()));
+                root.Children.Add(new KeyValue("TargetBuildID", manifest.BuildId.ToString()));
             }
 
-            AppendBlockStart(builder, 1, "InstalledDepots");
-
-            foreach (var depot in manifest.Depots.OrderBy(depot => depot.DepotId))
+            var depots = new KeyValue("InstalledDepots");
+            foreach (var depot in manifest.Depots.OrderBy(d => d.DepotId))
             {
-                AppendBlockStart(builder, 2, depot.DepotId.ToString());
-                AppendKeyValue(builder, 3, "manifest", depot.ManifestId.ToString());
-                AppendBlockEnd(builder, 2);
+                var depotKv = new KeyValue(depot.DepotId.ToString());
+                depotKv.Children.Add(new KeyValue("manifest", depot.ManifestId.ToString()));
+                depots.Children.Add(depotKv);
             }
+            root.Children.Add(depots);
 
-            AppendBlockEnd(builder, 1);
-            // AppendLanguageBlock(builder, "UserConfig", manifest.Language);
-            // AppendLanguageBlock(builder, "MountedConfig", manifest.Language);
-            builder.AppendLine("}");
-
-            return builder.ToString();
-        }
-
-        static void AppendLanguageBlock(StringBuilder builder, string name, string language)
-        {
-            if (string.IsNullOrWhiteSpace(language))
-            {
-                return;
-            }
-
-            AppendBlockStart(builder, 1, name);
-            AppendKeyValue(builder, 2, "language", language);
-            AppendBlockEnd(builder, 1);
-        }
-
-        static void AppendBlockStart(StringBuilder builder, int indent, string name)
-        {
-            AppendIndent(builder, indent);
-            builder.Append('"').Append(Escape(name)).AppendLine("\"");
-            AppendIndent(builder, indent);
-            builder.AppendLine("{");
-        }
-
-        static void AppendBlockEnd(StringBuilder builder, int indent)
-        {
-            AppendIndent(builder, indent);
-            builder.AppendLine("}");
-        }
-
-        static void AppendKeyValue(StringBuilder builder, int indent, string key, string value)
-        {
-            AppendIndent(builder, indent);
-            builder.Append('"').Append(Escape(key)).Append("\"\t\t\"").Append(Escape(value ?? string.Empty)).AppendLine("\"");
-        }
-
-        static void AppendIndent(StringBuilder builder, int indent)
-        {
-            builder.Append('\t', indent);
-        }
-
-        static string Escape(string value)
-        {
-            return value.Replace("\\", "\\\\").Replace("\"", "\\\"");
+            return root;
         }
     }
 }

@@ -326,7 +326,7 @@ namespace DepotDownloader
             return string.IsNullOrWhiteSpace(appName) ? appId.ToString() : appName;
         }
 
-        static void WriteAppManifest(uint appId, string branch, string language, IReadOnlyCollection<DepotDownloadInfo> depots, string configPath)
+        static void WriteAppManifest(uint appId, string branch, string language, IReadOnlyCollection<DepotDownloadInfo> depots, string configPath, uint stateFlags)
         {
             if (depots.Count == 0)
             {
@@ -346,6 +346,7 @@ namespace DepotDownloader
                 GetAppInstallDir(appId),
                 GetSteam3AppBuildNumber(appId, branch),
                 language ?? "english",
+                stateFlags,
                 depots.Select(depot => new SteamAppManifestDepot(depot.DepotId, depot.ManifestId)).ToList());
 
             AppManifestWriter.WriteToFile(manifestPath, manifest);
@@ -662,7 +663,7 @@ namespace DepotDownloader
 
                 if (Config.GenerateAppManifest)
                 {
-                    WriteAppManifest(appId, branch, language, infos, configPath);
+                    WriteAppManifest(appId, branch, language, infos, configPath, stateFlags: 4);
                 }
             }
             catch (OperationCanceledException)
