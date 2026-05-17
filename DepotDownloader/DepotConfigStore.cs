@@ -15,11 +15,15 @@ namespace DepotDownloader
         [ProtoMember(1)]
         public Dictionary<uint, ulong> InstalledManifestIDs { get; private set; }
 
+        [ProtoMember(2)]
+        public Dictionary<uint, AppDownloadConfig> AppConfigs { get; private set; }
+
         string FileName;
 
         DepotConfigStore()
         {
             InstalledManifestIDs = [];
+            AppConfigs = [];
         }
 
         static bool Loaded
@@ -39,6 +43,12 @@ namespace DepotDownloader
                 using var fs = File.Open(filename, FileMode.Open);
                 using var ds = new DeflateStream(fs, CompressionMode.Decompress);
                 Instance = Serializer.Deserialize<DepotConfigStore>(ds);
+
+                // Backward compat: old depot.config files lack ProtoMember(2),
+                // and protobuf-net invokes the private ctor through reflection
+                // bypassing field initializers in some paths.
+                Instance.InstalledManifestIDs ??= [];
+                Instance.AppConfigs ??= [];
             }
             else
             {
