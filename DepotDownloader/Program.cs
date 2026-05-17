@@ -386,6 +386,7 @@ namespace DepotDownloader
                 var manifestIdList = GetParameterList<ulong>(args, "-manifest");
                 if (manifestIdList.Count > 0)
                 {
+                    ContentDownloader.Config.HasExplicitDepots = true;
                     if (depotIdList.Count != manifestIdList.Count)
                     {
                         Console.WriteLine("Error: -manifest requires one id for every -depot specified");
@@ -397,6 +398,7 @@ namespace DepotDownloader
                 }
                 else if (depotIdList.Count > 0)
                 {
+                    ContentDownloader.Config.HasExplicitDepots = true;
                     depotManifestIds.AddRange(depotIdList.Select(depotId =>
                     {
                         var manifestId = ContentDownloader.Config.LuaManifestIds != null && ContentDownloader.Config.LuaManifestIds.TryGetValue(depotId, out var luaManifestId)
