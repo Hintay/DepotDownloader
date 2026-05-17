@@ -527,6 +527,22 @@ namespace DepotDownloader
                 Config.InstallDirectory = Path.Combine(STEAMAPPS_DIR, "common", GetAppInstallDir(appId));
             }
 
+            // Load our configuration data containing the depots currently installed
+            var configPath = Config.InstallDirectory;
+            if (string.IsNullOrWhiteSpace(configPath))
+            {
+                configPath = DEFAULT_DOWNLOAD_DIR;
+            }
+            if (steamLayoutActive)
+            {
+                // Library-level state root: depot.config and appmanifest_<id>.acf live at
+                // ./steamapps/, not nested inside ./steamapps/common/<installdir>/.
+                configPath = STEAMAPPS_DIR;
+            }
+
+            // Local helpers — declared after configPath is finalized so the path
+            // resolver can capture it. C# local functions require their captured
+            // locals to be declared earlier in textual order (CS0841).
             bool ShouldWriteAppManifest() => steamLayoutActive || Config.GenerateAppManifest;
 
             string ResolveAppManifestPath()
@@ -540,19 +556,6 @@ namespace DepotDownloader
                     return Path.Combine(configPath, $"appmanifest_{appId}.acf");
                 }
                 return Path.Combine(configPath, CONFIG_DIR, $"appmanifest_{appId}.acf");
-            }
-
-            // Load our configuration data containing the depots currently installed
-            var configPath = Config.InstallDirectory;
-            if (string.IsNullOrWhiteSpace(configPath))
-            {
-                configPath = DEFAULT_DOWNLOAD_DIR;
-            }
-            if (steamLayoutActive)
-            {
-                // Library-level state root: depot.config and appmanifest_<id>.acf live at
-                // ./steamapps/, not nested inside ./steamapps/common/<installdir>/.
-                configPath = STEAMAPPS_DIR;
             }
 
             Directory.CreateDirectory(Path.Combine(configPath, CONFIG_DIR));
