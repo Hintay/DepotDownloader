@@ -261,6 +261,48 @@ namespace DepotDownloader
             bool autoMigrate,
             bool interactive)
         {
+            var candidates = Detect(requested, DEPOTS_ROOT, targetDir);
+            if (candidates.Count == 0)
+            {
+                return;
+            }
+
+            IReadOnlyList<MigrationCandidate> accepted;
+            if (autoMigrate)
+            {
+                // -migrate-depot bypasses all prompts.
+                accepted = candidates;
+            }
+            else if (!interactive)
+            {
+                // No TTY for prompting — inform and skip.
+                System.Console.WriteLine(
+                    "Detected {0} depot-mode install(s) that could be migrated. " +
+                    "Output is redirected; pass -migrate-depot to migrate automatically.",
+                    candidates.Count);
+                return;
+            }
+            else
+            {
+                accepted = Prompt(candidates);
+            }
+
+            foreach (var candidate in accepted)
+            {
+                try
+                {
+                    Apply(candidate);
+                    System.Console.WriteLine(
+                        "Migrated depot {0} (manifest {1}) from {2} to {3}",
+                        candidate.DepotId, candidate.ManifestId, candidate.SourceDir, candidate.TargetDir);
+                }
+                catch (System.Exception ex)
+                {
+                    System.Console.WriteLine(
+                        "Migration of depot {0} failed: {1}. Some files may be left at {2}.",
+                        candidate.DepotId, ex.Message, candidate.SourceDir);
+                }
+            }
         }
     }
 }

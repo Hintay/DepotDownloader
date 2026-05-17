@@ -751,6 +751,19 @@ namespace DepotDownloader
                 Console.WriteLine("Previous download was interrupted (StateFlags={0}). {1}/{2} depots already installed, resuming...", installed.StateFlags, completed, infos.Count);
             }
 
+            // Detect any depot-mode installs of the requested depots and offer to migrate
+            // their files into the Steam-layout location. Only fires in steam-layout mode
+            // (Config.InstallDirectory is the steamapps/common/<installdir>/ path by this
+            // point, set by the steamLayoutActive override earlier in this method).
+            if (steamLayoutActive)
+            {
+                DepotMigration.MaybeMigrate(
+                    infos.Select(d => (d.DepotId, d.ManifestId)),
+                    Config.InstallDirectory,
+                    autoMigrate: Config.MigrateDepotInstalls,
+                    interactive: Ansi.CanUseInteractiveProgress);
+            }
+
             if (ShouldWriteAppManifest())
             {
                 WriteAppManifest(appId, branch, language, infos, configPath, stateFlags: 1026);
