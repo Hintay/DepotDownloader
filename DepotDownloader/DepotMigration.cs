@@ -100,9 +100,11 @@ namespace DepotDownloader
         }
 
         // Reads a compressed-protobuf DepotConfigStore from disk without touching
-        // the global singleton. We use the same deflate+protobuf shape as
-        // DepotConfigStore.LoadFromFile but instantiate locally via reflection
-        // (DepotConfigStore's ctor and Instance setter are private).
+        // the global singleton. Mirrors DepotConfigStore.LoadFromFile's deflate+protobuf
+        // shape; protobuf-net invokes DepotConfigStore's private parameterless ctor
+        // directly, so no reflection is needed. If the depot-mode depot.config format
+        // changes, both this method and DepotConfigStore.LoadFromFile must be updated
+        // in lockstep.
         static Dictionary<uint, ulong> LoadDepotModeManifestIds(string path)
         {
             using var fs = File.OpenRead(path);
