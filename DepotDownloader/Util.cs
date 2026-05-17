@@ -79,7 +79,7 @@ namespace DepotDownloader
         }
 
         // Validate a file against Steam3 Chunk data
-        public static List<DepotManifest.ChunkData> ValidateSteam3FileChecksums(FileStream fs, DepotManifest.ChunkData[] chunkdata)
+        public static List<DepotManifest.ChunkData> ValidateSteam3FileChecksums(FileStream fs, DepotManifest.ChunkData[] chunkdata, Action<DepotManifest.ChunkData, bool> chunkValidated = null)
         {
             var neededChunks = new List<DepotManifest.ChunkData>();
 
@@ -88,10 +88,13 @@ namespace DepotDownloader
                 fs.Seek((long)data.Offset, SeekOrigin.Begin);
 
                 var adler = AdlerHash(fs, (int)data.UncompressedLength);
-                if (!adler.SequenceEqual(BitConverter.GetBytes(data.Checksum)))
+                var matched = adler.SequenceEqual(BitConverter.GetBytes(data.Checksum));
+                if (!matched)
                 {
                     neededChunks.Add(data);
                 }
+
+                chunkValidated?.Invoke(data, matched);
             }
 
             return neededChunks;

@@ -12,7 +12,6 @@ using System.Linq;
 using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
-using Spectre.Console;
 using SteamKit2;
 using SteamKit2.CDN;
 
@@ -747,135 +746,6 @@ namespace DepotDownloader
             public int chunksToDownload;
         }
 
-        private class GlobalDownloadCounter
-        {
-            public ulong completeDownloadSize;
-            public ulong totalBytesCompressed;
-            public ulong totalBytesUncompressed;
-            public ulong totalDownloadSize;
-            public DateTime downloadStartTime;
-            public uint currentDepotId;
-            public int currentDepotCompletedChunks;
-            public int currentDepotTotalChunks;
-            public ulong diskBytesWritten;
-            public long diskWriteTicks;
-            public ProgressTask progressTask;
-
-            public void Begin(ulong totalSize, bool useInteractiveProgress)
-            {
-                totalDownloadSize = totalSize;
-                downloadStartTime = DateTime.UtcNow;
-
-                if (!useInteractiveProgress)
-                {
-                    Ansi.Progress(0, totalSize);
-                }
-            }
-
-            public void SetProgressTask(ProgressTask task)
-            {
-                progressTask = task;
-            }
-
-            public void SetCurrentDepot(uint depotId, int completedChunks = 0, int totalChunks = 0)
-            {
-                lock (this)
-                {
-                    currentDepotId = depotId;
-                    currentDepotCompletedChunks = completedChunks;
-                    currentDepotTotalChunks = totalChunks;
-                    UpdateProgressDisplay();
-                }
-            }
-
-            public void SetCurrentDepotChunks(int completedChunks, int totalChunks)
-            {
-                lock (this)
-                {
-                    currentDepotCompletedChunks = completedChunks;
-                    currentDepotTotalChunks = totalChunks;
-                    UpdateProgressDisplay();
-                }
-            }
-
-            public void AddCompletedBytes(ulong bytes)
-            {
-                lock (this)
-                {
-                    if (completeDownloadSize >= bytes)
-                    {
-                        completeDownloadSize -= bytes;
-                    }
-                    else
-                    {
-                        completeDownloadSize = 0;
-                    }
-
-                    UpdateProgressDisplay();
-                }
-            }
-
-            public void AddCompletedChunk(ulong bytes, int completedChunks, int totalChunks, ulong diskBytes, TimeSpan diskElapsed)
-            {
-                lock (this)
-                {
-                    currentDepotCompletedChunks = completedChunks;
-                    currentDepotTotalChunks = totalChunks;
-                    diskBytesWritten += diskBytes;
-                    diskWriteTicks += diskElapsed.Ticks;
-
-                    if (completeDownloadSize >= bytes)
-                    {
-                        completeDownloadSize -= bytes;
-                    }
-                    else
-                    {
-                        completeDownloadSize = 0;
-                    }
-
-                    UpdateProgressDisplay();
-                }
-            }
-
-            public void Finish()
-            {
-                lock (this)
-                {
-                    progressTask?.Increment(progressTask.MaxValue - progressTask.Value);
-                    Ansi.Progress(totalDownloadSize, totalDownloadSize);
-                }
-            }
-
-            private void UpdateProgressDisplay()
-            {
-                if (totalDownloadSize == 0)
-                {
-                    return;
-                }
-
-                var downloaded = totalDownloadSize - completeDownloadSize;
-                var now = DateTime.UtcNow;
-                var elapsed = now - downloadStartTime;
-                var bytesPerSecond = elapsed.TotalSeconds > 0 ? downloaded / elapsed.TotalSeconds : 0;
-                var diskElapsed = TimeSpan.FromTicks(diskWriteTicks);
-                var diskBytesPerSecond = diskElapsed.TotalSeconds > 0 ? diskBytesWritten / diskElapsed.TotalSeconds : 0;
-                var eta = bytesPerSecond > 0 ? TimeSpan.FromSeconds(completeDownloadSize / bytesPerSecond) : (TimeSpan?)null;
-
-                if (progressTask != null)
-                {
-                    var increment = downloaded - progressTask.Value;
-                    if (increment > 0)
-                    {
-                        progressTask.Increment(increment);
-                    }
-
-                    progressTask.Description = $"Depot {currentDepotId} | C {currentDepotCompletedChunks}/{currentDepotTotalChunks} | N {Ansi.FormatBytes(bytesPerSecond)}/s | D {Ansi.FormatBytes(diskBytesPerSecond)}/s | ETA {Ansi.FormatEta(eta)}";
-                }
-
-                Ansi.Progress(downloaded, totalDownloadSize);
-            }
-        }
-
         private class DepotDownloadCounter
         {
             public ulong completeDownloadSize;
@@ -933,25 +803,17 @@ namespace DepotDownloader
             {
                 if (useInteractiveProgress)
                 {
-                    await AnsiConsole.Progress()
-                        .AutoClear(false)
-                        .Columns(
-                            new TaskDescriptionColumn(),
-                            new ProgressBarColumn(),
-                            new PercentageColumn(),
-                            new SpinnerColumn())
-                        .StartAsync(async ctx =>
+                    downloadCounter.Begin(totalDownloadSize, true);
+
+                    await Ansi.RunWithProgressAsync(downloadCounter, async () =>
+                    {
+                        foreach (var depotFileData in depotsToDownload)
                         {
-                            downloadCounter.Begin(totalDownloadSize, true);
-                            downloadCounter.SetProgressTask(ctx.AddTask("Downloading", maxValue: totalDownloadSize));
+                            await DownloadSteam3AsyncDepotFiles(cts, downloadCounter, depotFileData, allFileNamesAllDepots);
+                        }
 
-                            foreach (var depotFileData in depotsToDownload)
-                            {
-                                await DownloadSteam3AsyncDepotFiles(cts, downloadCounter, depotFileData, allFileNamesAllDepots);
-                            }
-
-                            downloadCounter.Finish();
-                        });
+                        downloadCounter.Finish();
+                    });
                 }
                 else
                 {
@@ -996,6 +858,14 @@ namespace DepotDownloader
                 // We only have to show this warning if the old manifest ID was different
                 var badHashWarning = (lastManifestId != depot.ManifestId);
                 oldManifest = Util.LoadManifestFromFile(configDir, depot.DepotId, lastManifestId, badHashWarning);
+
+                // Fall back to the user-supplied manifest directory so previously-installed manifests
+                // there are picked up as the "old" manifest and per-file FileHash comparison can short-circuit
+                // re-validation when the file content hasn't changed.
+                if (oldManifest == null && Config.UseManifestDirectory)
+                {
+                    oldManifest = Util.LoadManifestFromFile(Config.ManifestDirectory, depot.DepotId, lastManifestId, badHashWarning);
+                }
             }
 
             if (Config.UseManifestFile)
@@ -1007,6 +877,12 @@ namespace DepotDownloader
                     Console.WriteLine("Unable to load manifest file {0} for depot {1}", Config.ManifestFile, depot.DepotId);
                     cts.Cancel();
                 }
+                else
+                {
+                    // Cache the manifest in configDir so subsequent runs can load it as the "old" manifest
+                    // and short-circuit per-file validation when FileHash matches.
+                    Util.SaveManifestToFile(configDir, newManifest);
+                }
             }
             else if (Config.UseManifestDirectory)
             {
@@ -1016,6 +892,10 @@ namespace DepotDownloader
                 {
                     Console.WriteLine("Unable to load manifest {0} for depot {1} from directory {2}", depot.ManifestId, depot.DepotId, Config.ManifestDirectory);
                     cts.Cancel();
+                }
+                else
+                {
+                    Util.SaveManifestToFile(configDir, newManifest);
                 }
             }
             else if (lastManifestId == depot.ManifestId && oldManifest != null)
@@ -1193,6 +1073,13 @@ namespace DepotDownloader
 
                     downloadCounter.completeDownloadSize += file.TotalSize;
                     depotCounter.completeDownloadSize += file.TotalSize;
+
+                    // Pre-register existing files so the verify progress bar's total is known
+                    // upfront and doesn't grow (causing the percentage to jump backward).
+                    if (File.Exists(fileFinalPath))
+                    {
+                        downloadCounter.RegisterVerifyWork(file.TotalSize, file.Chunks.Count);
+                    }
                 }
             });
 
@@ -1214,7 +1101,7 @@ namespace DepotDownloader
             var depot = depotFilesData.depotDownloadInfo;
             var depotCounter = depotFilesData.depotCounter;
 
-            Console.WriteLine("Downloading depot {0}", depot.DepotId);
+            downloadCounter.InteractiveLog("Downloading depot {0}", depot.DepotId);
             downloadCounter.SetCurrentDepot(depot.DepotId);
 
             var files = depotFilesData.filteredFiles.Where(f => !f.Flags.HasFlag(EDepotFileFlag.Directory)).ToArray();
@@ -1267,14 +1154,14 @@ namespace DepotDownloader
                         continue;
 
                     File.Delete(fileFinalPath);
-                    Console.WriteLine("Deleted {0}", fileFinalPath);
+                    downloadCounter.InteractiveLog("Deleted {0}", fileFinalPath);
                 }
             }
 
             DepotConfigStore.Instance.InstalledManifestIDs[depot.DepotId] = depot.ManifestId;
             DepotConfigStore.Save();
 
-            Console.WriteLine("Depot {0} - Downloaded {1} bytes ({2} bytes uncompressed)", depot.DepotId, depotCounter.depotBytesCompressed, depotCounter.depotBytesUncompressed);
+            downloadCounter.InteractiveLog("Depot {0} - Downloaded {1} bytes ({2} bytes uncompressed)", depot.DepotId, depotCounter.depotBytesCompressed, depotCounter.depotBytesUncompressed);
         }
 
         private static void DownloadSteam3AsyncDepotFile(
@@ -1310,7 +1197,7 @@ namespace DepotDownloader
             var fileDidExist = fi.Exists;
             if (!fileDidExist)
             {
-                Console.WriteLine("Pre-allocating {0}", fileFinalPath);
+                downloadCounter.InteractiveLog("Pre-allocating {0}", fileFinalPath);
 
                 // create new file. need all chunks
                 using var fs = File.Create(fileFinalPath);
@@ -1328,6 +1215,8 @@ namespace DepotDownloader
             else
             {
                 // open existing
+                var didValidatePerChunk = false;
+
                 if (oldManifestFile != null)
                 {
                     neededChunks = [];
@@ -1338,7 +1227,7 @@ namespace DepotDownloader
                         // we have a version of this file, but it doesn't fully match what we want
                         if (Config.VerifyAll)
                         {
-                            Console.WriteLine("Validating {0}", fileFinalPath);
+                            downloadCounter.InteractiveLog("Validating {0}", fileFinalPath);
                         }
 
                         var matchingChunks = new List<ChunkMatch>();
@@ -1360,6 +1249,8 @@ namespace DepotDownloader
 
                         var copyChunks = new List<ChunkMatch>();
 
+                        didValidatePerChunk = true;
+
                         using (var fsOld = File.Open(fileFinalPath, FileMode.Open))
                         {
                             foreach (var match in orderedChunks)
@@ -1367,6 +1258,8 @@ namespace DepotDownloader
                                 fsOld.Seek((long)match.OldChunk.Offset, SeekOrigin.Begin);
 
                                 var adler = Util.AdlerHash(fsOld, (int)match.OldChunk.UncompressedLength);
+                                downloadCounter.AddVerifiedChunk(match.OldChunk.UncompressedLength);
+
                                 if (!adler.SequenceEqual(BitConverter.GetBytes(match.OldChunk.Checksum)))
                                 {
                                     neededChunks.Add(match.NewChunk);
@@ -1374,6 +1267,13 @@ namespace DepotDownloader
                                 else
                                 {
                                     copyChunks.Add(match);
+
+                                    lock (depotDownloadCounter)
+                                    {
+                                        depotDownloadCounter.sizeDownloaded += match.NewChunk.UncompressedLength;
+                                    }
+
+                                    downloadCounter.AddCompletedBytes(match.NewChunk.UncompressedLength);
                                 }
                             }
                         }
@@ -1427,30 +1327,53 @@ namespace DepotDownloader
                         }
                     }
 
-                    Console.WriteLine("Validating {0}", fileFinalPath);
-                    neededChunks = Util.ValidateSteam3FileChecksums(fs, [.. file.Chunks.OrderBy(x => x.Offset)]);
+                    downloadCounter.InteractiveLog("Validating {0}", fileFinalPath);
+                    didValidatePerChunk = true;
+
+                    neededChunks = Util.ValidateSteam3FileChecksums(
+                        fs,
+                        [.. file.Chunks.OrderBy(x => x.Offset)],
+                        (chunk, matched) =>
+                        {
+                            downloadCounter.AddVerifiedChunk(chunk.UncompressedLength);
+
+                            if (matched)
+                            {
+                                lock (depotDownloadCounter)
+                                {
+                                    depotDownloadCounter.sizeDownloaded += chunk.UncompressedLength;
+                                }
+
+                                downloadCounter.AddCompletedBytes(chunk.UncompressedLength);
+                            }
+                        });
                 }
 
                 if (neededChunks.Count == 0)
                 {
-                    lock (depotDownloadCounter)
+                    if (!didValidatePerChunk)
                     {
-                        depotDownloadCounter.sizeDownloaded += file.TotalSize;
-                        Console.WriteLine("{0,6:#00.00}% {1}", (depotDownloadCounter.sizeDownloaded / (float)depotDownloadCounter.completeDownloadSize) * 100.0f, fileFinalPath);
+                        // Old manifest hash matched and verification was skipped - credit the entire file at once.
+                        lock (depotDownloadCounter)
+                        {
+                            depotDownloadCounter.sizeDownloaded += file.TotalSize;
+                        }
+
+                        downloadCounter.AddCompletedBytes(file.TotalSize);
                     }
 
-                    downloadCounter.AddCompletedBytes(file.TotalSize);
+                    float depotPercent;
+                    lock (depotDownloadCounter)
+                    {
+                        depotPercent = (depotDownloadCounter.sizeDownloaded / (float)depotDownloadCounter.completeDownloadSize) * 100.0f;
+                    }
+
+                    downloadCounter.FileCompleted(depotPercent, fileFinalPath);
 
                     return;
                 }
 
-                var sizeOnDisk = (file.TotalSize - (ulong)neededChunks.Select(x => (long)x.UncompressedLength).Sum());
-                lock (depotDownloadCounter)
-                {
-                    depotDownloadCounter.sizeDownloaded += sizeOnDisk;
-                }
-
-                downloadCounter.AddCompletedBytes(sizeOnDisk);
+                // Per-chunk validation already credited the matched bytes to sizeDownloaded / completeDownloadSize.
             }
 
             var fileIsExecutable = file.Flags.HasFlag(EDepotFileFlag.Executable);
@@ -1638,7 +1561,7 @@ namespace DepotDownloader
             if (remainingChunks == 0)
             {
                 var fileFinalPath = Path.Combine(depot.InstallDir, file.FileName);
-                Console.WriteLine("{0,6:#00.00}% {1}", (sizeDownloaded / (float)depotDownloadCounter.completeDownloadSize) * 100.0f, fileFinalPath);
+                downloadCounter.FileCompleted((sizeDownloaded / (float)depotDownloadCounter.completeDownloadSize) * 100.0f, fileFinalPath);
             }
         }
 
