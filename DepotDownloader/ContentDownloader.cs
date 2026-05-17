@@ -529,6 +529,19 @@ namespace DepotDownloader
 
             bool ShouldWriteAppManifest() => steamLayoutActive || Config.GenerateAppManifest;
 
+            string ResolveAppManifestPath()
+            {
+                if (!string.IsNullOrWhiteSpace(Config.AppManifestFile))
+                {
+                    return Config.AppManifestFile;
+                }
+                if (string.Equals(configPath, STEAMAPPS_DIR, StringComparison.Ordinal))
+                {
+                    return Path.Combine(configPath, $"appmanifest_{appId}.acf");
+                }
+                return Path.Combine(configPath, CONFIG_DIR, $"appmanifest_{appId}.acf");
+            }
+
             // Load our configuration data containing the depots currently installed
             var configPath = Config.InstallDirectory;
             if (string.IsNullOrWhiteSpace(configPath))
@@ -688,6 +701,52 @@ namespace DepotDownloader
             }
 
             Console.WriteLine();
+
+            var acfPath = ResolveAppManifestPath();
+            var installed = AppManifestReader.TryReadFromFile(acfPath);
+            var appName = GetAppName(appId);
+            if (installed == null)
+            {
+                Console.WriteLine("Installing app {0} ({1})...", appId, appName);
+            }
+            else if (installed.StateFlags == 4)
+            {
+                var mismatched = 0;
+                foreach (var (depotId, manifestId) in infos.Select(d => (d.DepotId, d.ManifestId)))
+                {
+                    installed.InstalledDepots.TryGetValue(depotId, out var recorded);
+                    if (recorded != manifestId)
+                    {
+                        mismatched++;
+                    }
+                }
+                if (mismatched == 0 && infos.Count > 0 && !Config.VerifyAll)
+                {
+                    Console.WriteLine("App {0} ({1}) is fully installed (build {2}). Nothing to do.", appId, appName, installed.BuildId);
+                    return;
+                }
+                if (mismatched > 0)
+                {
+                    Console.WriteLine("Update available for app {0} ({1}): {2} depot(s) have new manifests. Proceeding...", appId, appName, mismatched);
+                }
+                else if (Config.VerifyAll)
+                {
+                    Console.WriteLine("App {0} ({1}) is fully installed; re-verifying because -verify-all was passed.", appId, appName);
+                }
+            }
+            else // StateFlags != 4
+            {
+                var completed = 0;
+                foreach (var (depotId, manifestId) in infos.Select(d => (d.DepotId, d.ManifestId)))
+                {
+                    installed.InstalledDepots.TryGetValue(depotId, out var recorded);
+                    if (recorded == manifestId && recorded != 0)
+                    {
+                        completed++;
+                    }
+                }
+                Console.WriteLine("Previous download was interrupted (StateFlags={0}). {1}/{2} depots already installed, resuming...", installed.StateFlags, completed, infos.Count);
+            }
 
             if (ShouldWriteAppManifest())
             {
