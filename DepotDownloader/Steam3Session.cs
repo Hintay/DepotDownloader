@@ -199,6 +199,74 @@ namespace DepotDownloader
             }
         }
 
+        public async Task RequestAppInfoMany(IEnumerable<uint> appIds, bool bForce = false)
+        {
+            if (bAborted) return;
+
+            var toFetch = appIds.Where(id => bForce || !AppInfo.ContainsKey(id)).Distinct().ToList();
+            if (toFetch.Count == 0) return;
+
+            var tokens = await steamApps.PICSGetAccessTokens(toFetch, []);
+
+            foreach (var deniedId in tokens.AppTokensDenied)
+            {
+                var hasLuaOverride = ContentDownloader.Config.LuaAppTokens != null
+                    && ContentDownloader.Config.LuaAppTokens.ContainsKey(deniedId);
+                if (!hasLuaOverride)
+                {
+                    Ansi.LogLine("Insufficient privileges to get access token for app {0}", deniedId);
+                }
+            }
+
+            foreach (var kvp in tokens.AppTokens)
+            {
+                this.AppTokens[kvp.Key] = kvp.Value;
+            }
+
+            // Apply Lua-provided tokens as overrides (matches RequestAppInfo's single-app behavior).
+            if (ContentDownloader.Config.LuaAppTokens != null)
+            {
+                foreach (var id in toFetch)
+                {
+                    if (ContentDownloader.Config.LuaAppTokens.TryGetValue(id, out var luaToken))
+                    {
+                        this.AppTokens[id] = luaToken;
+                    }
+                }
+            }
+
+            var requests = toFetch.Select(id =>
+            {
+                var req = new SteamApps.PICSRequest(id);
+                if (AppTokens.TryGetValue(id, out var token))
+                {
+                    req.AccessToken = token;
+                }
+                if (TokenCFG.useAppToken)
+                {
+                    req.AccessToken = TokenCFG.appToken;
+                }
+                return req;
+            }).ToList();
+
+            var appInfoMultiple = await steamApps.PICSGetProductInfo(requests, []);
+
+            foreach (var appInfo in appInfoMultiple.Results)
+            {
+                foreach (var app_value in appInfo.Apps)
+                {
+                    var app = app_value.Value;
+                    Ansi.LogLine("Got AppInfo for {0}", app.ID);
+                    AppInfo[app.ID] = app;
+                }
+
+                foreach (var app in appInfo.UnknownApps)
+                {
+                    AppInfo[app] = null;
+                }
+            }
+        }
+
         public async Task RequestPackageInfo(IEnumerable<uint> packageIds)
         {
             var packages = packageIds.ToList();
