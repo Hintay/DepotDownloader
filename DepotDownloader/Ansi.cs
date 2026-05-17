@@ -2,6 +2,8 @@
 // in file 'LICENSE', which is part of this source code package.
 
 using System;
+using System.Collections.Concurrent;
+using System.Threading;
 using System.Threading.Tasks;
 using Spectre.Console;
 
@@ -24,6 +26,12 @@ static class Ansi
     const char BEL = (char)0x07;
 
     private static bool useProgress;
+
+    // Internal for tests: queue of pending writes during an active Progress.
+    // Drained by a single task spawned in RunWithProgressAsync so worker
+    // threads never call AnsiConsole concurrently with Spectre's render loop.
+    internal static int progressDepth;
+    internal static readonly ConcurrentQueue<string> deferredOutput = new();
 
     public static bool CanUseInteractiveProgress => !Console.IsInputRedirected && !Console.IsOutputRedirected;
 
@@ -84,9 +92,16 @@ static class Ansi
     // Routes through AnsiConsole when interactive so writes interleave correctly
     // with a live Progress display instead of corrupting the bar; falls back to
     // plain Console when output is redirected or the terminal lacks ANSI support.
+    // During Progress (progressDepth > 0) all writes are queued and flushed by
+    // the single drainer task in RunWithProgressAsync — see DrainLoopAsync.
     public static void LogLine(string format, params object[] args)
     {
         var message = args == null || args.Length == 0 ? format : string.Format(format, args);
+        if (Volatile.Read(ref progressDepth) > 0)
+        {
+            deferredOutput.Enqueue(message + Environment.NewLine);
+            return;
+        }
         if (useProgress)
         {
             AnsiConsole.WriteLine(message);
@@ -100,6 +115,11 @@ static class Ansi
     public static void LogWrite(string format, params object[] args)
     {
         var message = args == null || args.Length == 0 ? format : string.Format(format, args);
+        if (Volatile.Read(ref progressDepth) > 0)
+        {
+            deferredOutput.Enqueue(message);
+            return;
+        }
         if (useProgress)
         {
             AnsiConsole.Write(message);
@@ -110,35 +130,81 @@ static class Ansi
         }
     }
 
+    private static async Task DrainLoopAsync(CancellationToken ct)
+    {
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                await Task.Delay(100, ct).ConfigureAwait(false);
+                DrainBatch();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected on shutdown.
+        }
+    }
+
+    private static void DrainBatch()
+    {
+        while (deferredOutput.TryDequeue(out var text))
+        {
+            if (useProgress)
+            {
+                AnsiConsole.Write(text);
+            }
+            else
+            {
+                Console.Write(text);
+            }
+        }
+    }
+
     public static async Task RunWithProgressAsync(GlobalDownloadCounter counter, Func<Task> action)
     {
-        await AnsiConsole.Progress()
-            .AutoClear(false)
-            .HideCompleted(false)
-            .Columns(
-                new TaskDescriptionColumn { Alignment = Justify.Left },
-                new ProgressBarColumn { Width = 40 },
-                new PercentageColumn(),
-                new RemainingTimeColumn())
-            .StartAsync(async ctx =>
-            {
-                var maxValue = counter.totalDownloadSize == 0 ? 1.0 : counter.totalDownloadSize;
-                var downloadTask = ctx.AddTask("Preparing", maxValue: maxValue);
-                counter.AttachProgressTasks(downloadTask, () => ctx.AddTask("Verifying", autoStart: true, maxValue: 1.0));
+        Interlocked.Increment(ref progressDepth);
+        using var drainerCts = new CancellationTokenSource();
+        var drainerTask = Task.Run(() => DrainLoopAsync(drainerCts.Token));
 
-                try
+        try
+        {
+            await AnsiConsole.Progress()
+                .AutoClear(false)
+                .HideCompleted(false)
+                .Columns(
+                    new TaskDescriptionColumn { Alignment = Justify.Left },
+                    new ProgressBarColumn { Width = 40 },
+                    new PercentageColumn(),
+                    new RemainingTimeColumn())
+                .StartAsync(async ctx =>
                 {
-                    await action().ConfigureAwait(false);
-                }
-                finally
-                {
-                    counter.FinishVerify();
-                    if (!downloadTask.IsFinished)
+                    var maxValue = counter.totalDownloadSize == 0 ? 1.0 : counter.totalDownloadSize;
+                    var downloadTask = ctx.AddTask("Preparing", maxValue: maxValue);
+                    counter.AttachProgressTasks(downloadTask, () => ctx.AddTask("Verifying", autoStart: true, maxValue: 1.0));
+
+                    try
                     {
-                        downloadTask.Value = downloadTask.MaxValue;
+                        await action().ConfigureAwait(false);
                     }
-                }
-            }).ConfigureAwait(false);
+                    finally
+                    {
+                        counter.FinishVerify();
+                        if (!downloadTask.IsFinished)
+                        {
+                            downloadTask.Value = downloadTask.MaxValue;
+                        }
+                    }
+                }).ConfigureAwait(false);
+        }
+        finally
+        {
+            drainerCts.Cancel();
+            try { await drainerTask.ConfigureAwait(false); }
+            catch (OperationCanceledException) { /* expected */ }
+            Interlocked.Decrement(ref progressDepth);
+            DrainBatch();   // final pass — progressDepth is 0, writes go to console directly
+        }
     }
 }
 
@@ -324,7 +390,7 @@ class GlobalDownloadCounter
             return;
         }
 
-        AnsiConsole.WriteLine(string.Format(format, args));
+        Ansi.LogLine(format, args);
     }
 
     public void FileCompleted(float depotPercent, string filePath)
