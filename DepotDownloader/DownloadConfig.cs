@@ -46,5 +46,7 @@ namespace DepotDownloader
         public bool BatchLuaDownload { get; set; }
         public bool HasExplicitDepots { get; set; }
         public bool MigrateDepotInstalls { get; set; }
+        public HashSet<uint> LuaOwnedApps { get; set; }
+        public bool HasExplicitPlatformArgs { get; set; }
     }
 }

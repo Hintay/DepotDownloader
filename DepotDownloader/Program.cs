@@ -170,6 +170,7 @@ namespace DepotDownloader
             ContentDownloader.Config.LuaFile = GetOptionalParameter(args, "-lua");
             ContentDownloader.Config.LuaManifestIds = [];
             ContentDownloader.Config.LuaAppTokens = [];
+            ContentDownloader.Config.LuaOwnedApps = [];
 
             ContentDownloader.Config.InstallDirectory = GetParameter<string>(args, "-dir");
             ContentDownloader.Config.MigrateDepotInstalls = HasParameter(args, "-migrate-depot");
@@ -251,6 +252,7 @@ namespace DepotDownloader
                     var luaDepotData = DepotKeyStore.AddFromLua(lua);
                     ContentDownloader.Config.LuaManifestIds = luaDepotData.ManifestIds;
                     ContentDownloader.Config.LuaAppTokens = luaDepotData.AppTokens;
+                    ContentDownloader.Config.LuaOwnedApps = luaDepotData.OwnedApps;
 
                     Console.WriteLine("Using Lua file: '{0}'.", ContentDownloader.Config.LuaFile);
                 }
@@ -377,6 +379,14 @@ namespace DepotDownloader
                     Console.WriteLine("Error: Cannot specify -language when -all-languages is specified.");
                     return 1;
                 }
+
+                ContentDownloader.Config.HasExplicitPlatformArgs =
+                    HasParameter(args, "-os")
+                    || HasParameter(args, "-osarch")
+                    || HasParameter(args, "-language")
+                    || HasParameter(args, "-all-platforms")
+                    || HasParameter(args, "-all-archs")
+                    || HasParameter(args, "-all-languages");
 
                 var lv = HasParameter(args, "-lowviolence");
 

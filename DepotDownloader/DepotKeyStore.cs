@@ -16,6 +16,7 @@ namespace DepotDownloader
         {
             public Dictionary<uint, ulong> ManifestIds { get; } = [];
             public Dictionary<uint, ulong> AppTokens { get; } = [];
+            public HashSet<uint> OwnedApps { get; } = [];
         }
 
         public static void AddAll(string[] values)
@@ -40,9 +41,17 @@ namespace DepotDownloader
 
             script.Globals["addappid"] = CallbackFunction.FromDelegate(script, new Func<ScriptExecutionContext, CallbackArguments, DynValue>((context, args) =>
             {
-                if (TryGetUInt32(args, 0, out var depotId) && args.Count >= 3 && TryGetString(args[2], out var depotKey))
+                if (TryGetUInt32(args, 0, out var appId))
                 {
-                    depotKeysCache[depotId] = StringToByteArray(depotKey);
+                    // Always record as an "owned app" — covers both the 1-arg
+                    // form (DLC / main app declaration) and the 3-arg form
+                    // (which also registers a depot key for the same id).
+                    data.OwnedApps.Add(appId);
+
+                    if (args.Count >= 3 && TryGetString(args[2], out var depotKey))
+                    {
+                        depotKeysCache[appId] = StringToByteArray(depotKey);
+                    }
                 }
 
                 return DynValue.Nil;
