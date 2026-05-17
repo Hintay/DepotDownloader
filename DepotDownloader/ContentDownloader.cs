@@ -338,7 +338,18 @@ namespace DepotDownloader
             var manifestPath = Config.AppManifestFile;
             if (string.IsNullOrWhiteSpace(manifestPath))
             {
-                manifestPath = Path.Combine(configPath, CONFIG_DIR, $"appmanifest_{appId}.acf");
+                // Steam-layout case: configPath is "steamapps"; .acf lives at the library root
+                // (sibling of common/), matching Steam's own appmanifest_<id>.acf placement.
+                // For -dir mode (configPath == InstallDirectory), keep the historical nested
+                // path inside .DepotDownloader/ — preserves backward compatibility.
+                if (string.Equals(configPath, STEAMAPPS_DIR, StringComparison.Ordinal))
+                {
+                    manifestPath = Path.Combine(configPath, $"appmanifest_{appId}.acf");
+                }
+                else
+                {
+                    manifestPath = Path.Combine(configPath, CONFIG_DIR, $"appmanifest_{appId}.acf");
+                }
             }
 
             var manifest = new SteamAppManifest(
@@ -516,6 +527,8 @@ namespace DepotDownloader
                 Config.InstallDirectory = Path.Combine(STEAMAPPS_DIR, "common", GetAppInstallDir(appId));
             }
 
+            bool ShouldWriteAppManifest() => steamLayoutActive || Config.GenerateAppManifest;
+
             // Load our configuration data containing the depots currently installed
             var configPath = Config.InstallDirectory;
             if (string.IsNullOrWhiteSpace(configPath))
@@ -676,11 +689,16 @@ namespace DepotDownloader
 
             Console.WriteLine();
 
+            if (ShouldWriteAppManifest())
+            {
+                WriteAppManifest(appId, branch, language, infos, configPath, stateFlags: 1026);
+            }
+
             try
             {
                 await DownloadSteam3Async(infos).ConfigureAwait(false);
 
-                if (Config.GenerateAppManifest)
+                if (ShouldWriteAppManifest())
                 {
                     WriteAppManifest(appId, branch, language, infos, configPath, stateFlags: 4);
                 }
