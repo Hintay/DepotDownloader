@@ -294,9 +294,32 @@ namespace DepotDownloader
             return $"depot {depotId}  {name}  ({osQualifier})";
         }
 
-        public static IReadOnlyList<uint> PromptDlcs(IReadOnlyList<uint> dlcAppIds)
+        public static IReadOnlyList<uint> PromptDlcs(IReadOnlyList<uint> dlcAppIds, System.Func<uint, string> nameResolver)
         {
-            return dlcAppIds;
+            if (dlcAppIds.Count == 0)
+            {
+                return dlcAppIds;
+            }
+
+            var prompt = new MultiSelectionPrompt<uint>()
+                .Title("Select DLCs to install (default: all):")
+                .NotRequired()
+                .PageSize(15)
+                .InstructionsText("[grey](Press [blue]<space>[/] to toggle, [green]<enter>[/] to confirm)[/]")
+                .UseConverter(id =>
+                {
+                    var name = nameResolver?.Invoke(id);
+                    return string.IsNullOrWhiteSpace(name)
+                        ? $"app {id}"
+                        : $"app {id}  {name}";
+                });
+
+            foreach (var id in dlcAppIds)
+            {
+                prompt.AddChoice(id).Select();
+            }
+
+            return AnsiConsole.Prompt(prompt);
         }
     }
 }
