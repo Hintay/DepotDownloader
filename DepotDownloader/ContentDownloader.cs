@@ -1184,6 +1184,12 @@ namespace DepotDownloader
             var useInteractiveProgress = Ansi.CanUseInteractiveProgress && downloadCounter.completeDownloadSize > 0;
             var totalDownloadSize = downloadCounter.completeDownloadSize;
 
+            // Sum manifest-precomputed chunk totals across all depots and seed
+            // the global counter once, so the bar's C N/M denominator is final
+            // from the first Progress frame instead of growing depot-by-depot.
+            var grandTotalChunks = depotsToDownload.Sum(d => d.depotCounter.totalChunks);
+            downloadCounter.RegisterDepotChunks(0, grandTotalChunks);
+
             try
             {
                 if (useInteractiveProgress)
@@ -1437,6 +1443,13 @@ namespace DepotDownloader
             var filesAfterExclusions = newManifest.Files.AsParallel().Where(f => TestIsFileIncluded(f.FileName)).ToList();
             var allFileNames = new HashSet<string>(filesAfterExclusions.Count);
 
+            // Pre-compute total chunks for this depot from the manifest (pure
+            // arithmetic, no I/O). The grand total across all depots is what
+            // the bar's C N/M denominator displays from frame 1.
+            depotCounter.totalChunks = filesAfterExclusions
+                .Where(f => !f.Flags.HasFlag(EDepotFileFlag.Directory))
+                .Sum(f => f.Chunks.Count);
+
             // Pre-process
             filesAfterExclusions.ForEach(file =>
             {
@@ -1537,8 +1550,6 @@ namespace DepotDownloader
                 await Task.Yield();
                 DownloadSteam3AsyncDepotFile(cts, downloadCounter, depotFilesData, file, networkChunkQueue);
             });
-
-            downloadCounter.RegisterDepotChunks(depotCounter.completedChunks, depotCounter.totalChunks);
 
             await Parallel.ForEachAsync(networkChunkQueue, parallelOptions, async (q, cancellationToken) =>
             {
@@ -1693,6 +1704,7 @@ namespace DepotDownloader
                                     }
 
                                     downloadCounter.AddCompletedBytes(match.NewChunk.UncompressedLength);
+                                    downloadCounter.AddCompletedChunks(1);
                                 }
                             }
                         }
@@ -1764,6 +1776,7 @@ namespace DepotDownloader
                                 }
 
                                 downloadCounter.AddCompletedBytes(chunk.UncompressedLength);
+                                downloadCounter.AddCompletedChunks(1);
                             }
                         });
                 }
@@ -1779,6 +1792,7 @@ namespace DepotDownloader
                         }
 
                         downloadCounter.AddCompletedBytes(file.TotalSize);
+                        downloadCounter.AddCompletedChunks(file.Chunks.Count);
                     }
 
                     float depotPercent;
@@ -1811,11 +1825,6 @@ namespace DepotDownloader
                 fileLock = new SemaphoreSlim(1),
                 chunksToDownload = neededChunks.Count
             };
-
-            lock (depotDownloadCounter)
-            {
-                depotDownloadCounter.totalChunks += neededChunks.Count;
-            }
 
             foreach (var chunk in neededChunks)
             {

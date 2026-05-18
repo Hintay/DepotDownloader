@@ -460,6 +460,20 @@ class GlobalDownloadCounter
         }
     }
 
+    // Credits chunks that did NOT come through the network — e.g. matched
+    // adler checks during per-chunk validation or whole-file hash matches
+    // that skip download entirely. Used to keep the global C counter
+    // catching up to the M denominator in resume / verify-all paths.
+    public void AddCompletedChunks(int count)
+    {
+        if (count <= 0) return;
+        lock (this)
+        {
+            globalCompletedChunks += count;
+            UpdateProgressDisplay();
+        }
+    }
+
     public void AddCompletedChunk(ulong bytes, ulong diskBytes, TimeSpan diskElapsed)
     {
         lock (this)

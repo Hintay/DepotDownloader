@@ -160,5 +160,21 @@ namespace DepotDownloader.Tests
             Assert.Contains("C 5/10", desc);
             Assert.Contains("Depot 456", desc);
         }
+
+        [Fact]
+        public void AddCompletedChunks_IncrementsGlobalCounter()
+        {
+            var counter = new GlobalDownloadCounter();
+            counter.Begin(totalSize: 1000, useInteractiveProgress: false);
+            counter.RegisterDepotChunks(0, 100);
+
+            counter.AddCompletedChunks(5);
+            counter.AddCompletedChunks(3);
+            counter.AddCompletedChunks(0);    // no-op
+            counter.AddCompletedChunks(-1);   // no-op
+
+            var desc = counter.BuildProgressDescription();
+            Assert.Contains("C 8/100", desc);
+        }
     }
 }
