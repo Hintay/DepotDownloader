@@ -982,6 +982,7 @@ namespace DepotDownloader
                     if (mismatched == 0 && infos.Count > 0 && !Config.VerifyAll)
                     {
                         Console.WriteLine("App {0} ({1}) is fully installed (build {2}). Nothing to do.", appId, appName, installed.BuildId);
+                        appSuccess = true;  // Already fully installed counts as success.
                         return;
                     }
                     if (mismatched > 0)
