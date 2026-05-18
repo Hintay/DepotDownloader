@@ -363,6 +363,7 @@ namespace DepotDownloader
 
             AppManifestWriter.WriteToFile(manifestPath, manifest);
             Console.WriteLine("Generated appmanifest metadata file: {0}", manifestPath);
+            JsonProgressLogger.EmitAcfWritten(manifestPath);
         }
 
         public static bool InitializeSteam3(string username, string password)
@@ -1028,7 +1029,7 @@ namespace DepotDownloader
 
                 try
                 {
-                    await DownloadSteam3Async(infos).ConfigureAwait(false);
+                    await DownloadSteam3Async(infos, depotsOk, depotsFailed).ConfigureAwait(false);
 
                     if (ShouldWriteAppManifest())
                     {
@@ -1194,7 +1195,7 @@ namespace DepotDownloader
             public int completedChunks;
         }
 
-        private static async Task DownloadSteam3Async(List<DepotDownloadInfo> depots)
+        private static async Task DownloadSteam3Async(List<DepotDownloadInfo> depots, List<uint> depotsOk, List<uint> depotsFailed)
         {
             Ansi.Progress(Ansi.ProgressState.Indeterminate);
 
@@ -1214,6 +1215,13 @@ namespace DepotDownloader
                 {
                     depotsToDownload.Add(depotFileData);
                     allFileNamesAllDepots.UnionWith(depotFileData.allFileNames);
+
+                    // Emit depot_start once the manifest is fetched and the total
+                    // uncompressed size is known.
+                    JsonProgressLogger.EmitDepotStart(
+                        depot.DepotId,
+                        depot.ManifestId,
+                        depotFileData.manifest?.TotalUncompressedSize);
                 }
 
                 cts.Token.ThrowIfCancellationRequested();
@@ -1287,7 +1295,7 @@ namespace DepotDownloader
                     {
                         foreach (var depotFileData in depotsToDownload)
                         {
-                            await DownloadSteam3AsyncDepotFiles(cts, downloadCounter, depotFileData, allFileNamesAllDepots);
+                            await RunDepotDownloadAsync(cts, downloadCounter, depotFileData, allFileNamesAllDepots, depotsOk, depotsFailed);
                         }
 
                         downloadCounter.Finish();
@@ -1299,7 +1307,7 @@ namespace DepotDownloader
 
                     foreach (var depotFileData in depotsToDownload)
                     {
-                        await DownloadSteam3AsyncDepotFiles(cts, downloadCounter, depotFileData, allFileNamesAllDepots);
+                        await RunDepotDownloadAsync(cts, downloadCounter, depotFileData, allFileNamesAllDepots, depotsOk, depotsFailed);
                     }
 
                     downloadCounter.Finish();
@@ -1613,6 +1621,32 @@ namespace DepotDownloader
             }
 
             return (bytes, chunks);
+        }
+
+        // Per-depot wrapper that records success/failure into the app-level
+        // tallies and emits the depot_done NDJSON event. Re-throws to preserve
+        // the existing "depot failure aborts the app" semantics.
+        private static async Task RunDepotDownloadAsync(
+            CancellationTokenSource cts,
+            GlobalDownloadCounter downloadCounter,
+            DepotFilesData depotFilesData,
+            HashSet<string> allFileNamesAllDepots,
+            List<uint> depotsOk,
+            List<uint> depotsFailed)
+        {
+            var depotId = depotFilesData.depotDownloadInfo.DepotId;
+            try
+            {
+                await DownloadSteam3AsyncDepotFiles(cts, downloadCounter, depotFilesData, allFileNamesAllDepots);
+                depotsOk.Add(depotId);
+                JsonProgressLogger.EmitDepotDone(depotId, success: true);
+            }
+            catch (Exception ex)
+            {
+                depotsFailed.Add(depotId);
+                JsonProgressLogger.EmitDepotDone(depotId, success: false, error: ex.Message);
+                throw;
+            }
         }
 
         private static async Task DownloadSteam3AsyncDepotFiles(CancellationTokenSource cts,
@@ -2112,6 +2146,7 @@ namespace DepotDownloader
             }
 
             ulong sizeDownloaded;
+            ulong depotTotalSize;
             lock (depotDownloadCounter)
             {
                 sizeDownloaded = depotDownloadCounter.sizeDownloaded + (ulong)written;
@@ -2119,6 +2154,7 @@ namespace DepotDownloader
                 depotDownloadCounter.depotBytesCompressed += chunk.CompressedLength;
                 depotDownloadCounter.depotBytesUncompressed += chunk.UncompressedLength;
                 depotDownloadCounter.completedChunks++;
+                depotTotalSize = depotDownloadCounter.completeDownloadSize;
             }
 
             lock (downloadCounter)
@@ -2129,6 +2165,11 @@ namespace DepotDownloader
 
             depotFilesData.resumeStateStore?.MarkChunkCompleted(file, chunk, downloadCounter);
             downloadCounter.AddCompletedChunk(chunk.UncompressedLength, (ulong)written, diskStopwatch.Elapsed);
+
+            // Emit a per-depot progress event. The logger throttles to <= 4/sec
+            // per depot, so calling on every chunk credit is safe.
+            var percent = depotTotalSize > 0 ? (sizeDownloaded * 100.0 / depotTotalSize) : 0.0;
+            JsonProgressLogger.EmitProgress(depot.DepotId, sizeDownloaded, percent, speedBps: 0, etaSec: 0);
 
             if (remainingChunks == 0)
             {
