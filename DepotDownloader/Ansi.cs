@@ -3,6 +3,7 @@
 
 using System;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using Spectre.Console;
@@ -32,6 +33,14 @@ static class Ansi
     // threads never call AnsiConsole concurrently with Spectre's render loop.
     internal static int progressDepth;
     internal static readonly ConcurrentQueue<string> deferredOutput = new();
+
+    private const int DrainIntervalMs = 100;
+
+    internal static void ResetForTests()
+    {
+        progressDepth = 0;
+        while (deferredOutput.TryDequeue(out _)) { }
+    }
 
     public static bool CanUseInteractiveProgress => !Console.IsInputRedirected && !Console.IsOutputRedirected;
 
@@ -86,6 +95,9 @@ static class Ansi
             return;
         }
 
+        // Intentional: this is an OSC escape (Windows terminal progress UI),
+        // not visible text. It bypasses the deferredOutput queue because it
+        // does not affect line position and must be emitted in real time.
         Console.Write($"{ESC}]9;4;{(byte)state};{progress}{BEL}");
     }
 
@@ -136,13 +148,19 @@ static class Ansi
         {
             while (!ct.IsCancellationRequested)
             {
-                await Task.Delay(100, ct).ConfigureAwait(false);
+                await Task.Delay(DrainIntervalMs, ct).ConfigureAwait(false);
                 DrainBatch();
             }
         }
         catch (OperationCanceledException)
         {
             // Expected on shutdown.
+        }
+        catch (Exception ex)
+        {
+            // Drainer should never bring down the download; surface but don't rethrow.
+            // The final DrainBatch() in RunWithProgressAsync's finally still runs.
+            Console.Error.WriteLine($"Ansi drainer error: {ex.Message}");
         }
     }
 
@@ -161,9 +179,16 @@ static class Ansi
         }
     }
 
+    // Not designed for nested invocations — a second concurrent caller would
+    // spawn a second drainer racing the first over deferredOutput, and the
+    // inner finally would Decrement to depth=1 then DrainBatch directly to
+    // AnsiConsole while the outer Progress is still live (re-introducing the
+    // race this method exists to fix). DepotDownloader's single download
+    // pipeline guarantees one caller at a time.
     public static async Task RunWithProgressAsync(GlobalDownloadCounter counter, Func<Task> action)
     {
-        Interlocked.Increment(ref progressDepth);
+        var newDepth = Interlocked.Increment(ref progressDepth);
+        Debug.Assert(newDepth == 1, "RunWithProgressAsync is not reentrant");
         using var drainerCts = new CancellationTokenSource();
         var drainerTask = Task.Run(() => DrainLoopAsync(drainerCts.Token));
 

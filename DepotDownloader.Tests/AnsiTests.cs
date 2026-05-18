@@ -14,9 +14,7 @@ namespace DepotDownloader.Tests
     {
         public AnsiTests()
         {
-            // Reset between tests
-            Ansi.progressDepth = 0;
-            while (Ansi.deferredOutput.TryDequeue(out _)) { }
+            Ansi.ResetForTests();
         }
 
         [Fact]
@@ -91,6 +89,33 @@ namespace DepotDownloader.Tests
             {
                 Ansi.progressDepth = 0;
             }
+        }
+
+        [Fact]
+        public async Task RunWithProgressAsync_FlushesQueueOnExit()
+        {
+            // Verifies the drainer + final DrainBatch in finally actually
+            // empty the queue end-to-end (lifecycle test, not state-poke).
+            var counter = new GlobalDownloadCounter();
+            counter.Begin(totalSize: 100, useInteractiveProgress: false);
+
+            try
+            {
+                await Ansi.RunWithProgressAsync(counter, async () =>
+                {
+                    // Simulate workers writing during Progress
+                    Ansi.LogLine("line {0}", 1);
+                    Ansi.LogLine("line {0}", 2);
+                    Ansi.LogLine("line {0}", 3);
+                    await Task.Yield();
+                });
+            }
+            catch (System.NotSupportedException) { /* Spectre in headless test env */ }
+
+            // After exit, the queue must be empty.
+            Assert.Empty(Ansi.deferredOutput);
+            // progressDepth must be 0.
+            Assert.Equal(0, Ansi.progressDepth);
         }
     }
 }
