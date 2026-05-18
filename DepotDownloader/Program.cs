@@ -201,6 +201,7 @@ namespace DepotDownloader
             ContentDownloader.Config.ManifestDirectory = GetParameter<string>(args, "-manifestdir");
             ContentDownloader.Config.GenerateAppManifest = HasParameter(args, "-appmanifest");
             ContentDownloader.Config.JsonProgress = HasParameter(args, "--json-progress");
+            JsonProgressLogger.Enabled = ContentDownloader.Config.JsonProgress;
             ContentDownloader.Config.AppManifestFile = GetParameter<string>(args, "-appmanifestfile");
 
             if (ContentDownloader.Config.UseManifestFile && string.IsNullOrWhiteSpace(ContentDownloader.Config.ManifestFile))
