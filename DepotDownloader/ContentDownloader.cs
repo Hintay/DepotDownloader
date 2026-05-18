@@ -235,7 +235,7 @@ namespace DepotDownloader
                 if (otherAppId == appId)
                 {
                     // This shouldn't ever happen, but ya never know with Valve. Don't infinite loop.
-                    Console.WriteLine("App {0}, Depot {1} has depotfromapp of {2}!",
+                    (Config.JsonProgress ? Console.Error : Console.Out).WriteLine("App {0}, Depot {1} has depotfromapp of {2}!",
                         appId, depotId, otherAppId);
                     return INVALID_MANIFEST_ID;
                 }
@@ -263,7 +263,7 @@ namespace DepotDownloader
             // Either the branch just doesn't exist, or it has a password
             if (string.IsNullOrEmpty(Config.BetaPassword))
             {
-                Console.WriteLine($"Branch {branch} for depot {depotId} was not found, either it does not exist or it has a password.");
+                (Config.JsonProgress ? Console.Error : Console.Out).WriteLine($"Branch {branch} for depot {depotId} was not found, either it does not exist or it has a password.");
                 return INVALID_MANIFEST_ID;
             }
 
@@ -331,7 +331,7 @@ namespace DepotDownloader
         {
             if (depots.Count == 0)
             {
-                Console.WriteLine("No depots resolved; skipping appmanifest generation.");
+                (Config.JsonProgress ? Console.Error : Console.Out).WriteLine("No depots resolved; skipping appmanifest generation.");
                 return;
             }
 
@@ -362,7 +362,7 @@ namespace DepotDownloader
                 depots.Select(depot => new SteamAppManifestDepot(depot.DepotId, depot.ManifestId)).ToList());
 
             AppManifestWriter.WriteToFile(manifestPath, manifest);
-            Console.WriteLine("Generated appmanifest metadata file: {0}", manifestPath);
+            (Config.JsonProgress ? Console.Error : Console.Out).WriteLine("Generated appmanifest metadata file: {0}", manifestPath);
             JsonProgressLogger.EmitAcfWritten(manifestPath);
         }
 
@@ -388,7 +388,7 @@ namespace DepotDownloader
 
             if (!steam3.WaitForCredentials())
             {
-                Console.WriteLine("Unable to get steam3 credentials.");
+                (Config.JsonProgress ? Console.Error : Console.Out).WriteLine("Unable to get steam3 credentials.");
                 return false;
             }
 
@@ -428,12 +428,12 @@ namespace DepotDownloader
                 }
                 else
                 {
-                    Console.WriteLine("Unable to locate manifest ID for published file {0}", publishedFileId);
+                    (Config.JsonProgress ? Console.Error : Console.Out).WriteLine("Unable to locate manifest ID for published file {0}", publishedFileId);
                 }
             }
             else
             {
-                Console.WriteLine("Published file {0} has unsupported file type {1}. Skipping file", publishedFileId, fileType);
+                (Config.JsonProgress ? Console.Error : Console.Out).WriteLine("Published file {0} has unsupported file type {1}. Skipping file", publishedFileId, fileType);
             }
         }
 
@@ -466,7 +466,7 @@ namespace DepotDownloader
             }
             else
             {
-                Console.WriteLine($"Unable to query UGC details for {ugcId} from an anonymous account");
+                (Config.JsonProgress ? Console.Error : Console.Out).WriteLine($"Unable to query UGC details for {ugcId} from an anonymous account");
             }
 
             if (!string.IsNullOrEmpty(details?.URL))
@@ -497,7 +497,7 @@ namespace DepotDownloader
             using (var file = File.OpenWrite(fileStagingPath))
             using (var client = HttpClientFactory.CreateHttpClient())
             {
-                Console.WriteLine("Downloading {0}", fileName);
+                (Config.JsonProgress ? Console.Error : Console.Out).WriteLine("Downloading {0}", fileName);
                 var responseStream = await client.GetStreamAsync(url);
                 await responseStream.CopyToAsync(file);
             }
@@ -786,7 +786,7 @@ namespace DepotDownloader
                 }
                 else
                 {
-                    Console.WriteLine("Using app branch: '{0}'.", branch);
+                    (Config.JsonProgress ? Console.Error : Console.Out).WriteLine("Using app branch: '{0}'.", branch);
 
                     if (depots != null)
                     {
@@ -872,11 +872,11 @@ namespace DepotDownloader
                             var fromApp = depotChild["depotfromapp"].AsUnsignedInteger();
                             if (fromApp != 0)
                             {
-                                Console.WriteLine("Skipping shared depot {0} (provided by app {1})", entry.depotId, fromApp);
+                                (Config.JsonProgress ? Console.Error : Console.Out).WriteLine("Skipping shared depot {0} (provided by app {1})", entry.depotId, fromApp);
                             }
                             else
                             {
-                                Console.WriteLine("Skipping shared depot {0} (sharedinstall)", entry.depotId);
+                                (Config.JsonProgress ? Console.Error : Console.Out).WriteLine("Skipping shared depot {0} (sharedinstall)", entry.depotId);
                             }
                             return false;
                         }
@@ -961,13 +961,13 @@ namespace DepotDownloader
                     }
                 }
 
-                Console.WriteLine();
+                (Config.JsonProgress ? Console.Error : Console.Out).WriteLine();
 
                 // `acfPath`, `installed`, and `appName` are declared earlier (hoisted
                 // before the prompt blocks so `skipInteractivePrompts` could gate them).
                 if (installed == null)
                 {
-                    Console.WriteLine("Installing app {0} ({1})...", appId, appName);
+                    (Config.JsonProgress ? Console.Error : Console.Out).WriteLine("Installing app {0} ({1})...", appId, appName);
                 }
                 else if (installed.StateFlags == InstalledAppManifest.StateFullyInstalled)
                 {
@@ -982,17 +982,17 @@ namespace DepotDownloader
                     }
                     if (mismatched == 0 && infos.Count > 0 && !Config.VerifyAll)
                     {
-                        Console.WriteLine("App {0} ({1}) is fully installed (build {2}). Nothing to do.", appId, appName, installed.BuildId);
+                        (Config.JsonProgress ? Console.Error : Console.Out).WriteLine("App {0} ({1}) is fully installed (build {2}). Nothing to do.", appId, appName, installed.BuildId);
                         appSuccess = true;  // Already fully installed counts as success.
                         return;
                     }
                     if (mismatched > 0)
                     {
-                        Console.WriteLine("Update available for app {0} ({1}): {2} depot(s) have new manifests. Proceeding...", appId, appName, mismatched);
+                        (Config.JsonProgress ? Console.Error : Console.Out).WriteLine("Update available for app {0} ({1}): {2} depot(s) have new manifests. Proceeding...", appId, appName, mismatched);
                     }
                     else if (Config.VerifyAll)
                     {
-                        Console.WriteLine("App {0} ({1}) is fully installed; re-verifying because -verify-all was passed.", appId, appName);
+                        (Config.JsonProgress ? Console.Error : Console.Out).WriteLine("App {0} ({1}) is fully installed; re-verifying because -verify-all was passed.", appId, appName);
                     }
                 }
                 else // StateFlags != StateFullyInstalled (resume-from-interrupted path)
@@ -1006,7 +1006,7 @@ namespace DepotDownloader
                             completed++;
                         }
                     }
-                    Console.WriteLine("Previous download was interrupted (StateFlags={0}). {1}/{2} depots already installed, resuming...", installed.StateFlags, completed, infos.Count);
+                    (Config.JsonProgress ? Console.Error : Console.Out).WriteLine("Previous download was interrupted (StateFlags={0}). {1}/{2} depots already installed, resuming...", installed.StateFlags, completed, infos.Count);
                 }
 
                 // Detect any depot-mode installs of the requested depots and offer to migrate
@@ -1038,7 +1038,7 @@ namespace DepotDownloader
                 }
                 catch (OperationCanceledException)
                 {
-                    Console.WriteLine("App {0} was not completely downloaded.", appId);
+                    (Config.JsonProgress ? Console.Error : Console.Out).WriteLine("App {0} was not completely downloaded.", appId);
                     throw;
                 }
 
@@ -1071,14 +1071,14 @@ namespace DepotDownloader
                 manifestId = await GetSteam3DepotManifest(depotId, appId, branch);
                 if (manifestId == INVALID_MANIFEST_ID && !string.Equals(branch, DEFAULT_BRANCH, StringComparison.OrdinalIgnoreCase))
                 {
-                    Console.WriteLine("Warning: Depot {0} does not have branch named \"{1}\". Trying {2} branch.", depotId, branch, DEFAULT_BRANCH);
+                    (Config.JsonProgress ? Console.Error : Console.Out).WriteLine("Warning: Depot {0} does not have branch named \"{1}\". Trying {2} branch.", depotId, branch, DEFAULT_BRANCH);
                     branch = DEFAULT_BRANCH;
                     manifestId = await GetSteam3DepotManifest(depotId, appId, branch);
                 }
 
                 if (manifestId == INVALID_MANIFEST_ID)
                 {
-                    Console.WriteLine("Depot {0} missing public subsection or manifest section.", depotId);
+                    (Config.JsonProgress ? Console.Error : Console.Out).WriteLine("Depot {0} missing public subsection or manifest section.", depotId);
                     return null;
                 }
             }
@@ -1095,7 +1095,7 @@ namespace DepotDownloader
             }
             if (!steam3.DepotKeys.TryGetValue(depotId, out depotKey))
             {
-                Console.WriteLine("No valid depot key for {0}, unable to download.", depotId);
+                (Config.JsonProgress ? Console.Error : Console.Out).WriteLine("No valid depot key for {0}, unable to download.", depotId);
                 return null;
             }
 
@@ -1318,7 +1318,7 @@ namespace DepotDownloader
                 Ansi.Progress(Ansi.ProgressState.Hidden);
             }
 
-            Console.WriteLine("Total downloaded: {0} bytes ({1} bytes uncompressed) from {2} depots",
+            (Config.JsonProgress ? Console.Error : Console.Out).WriteLine("Total downloaded: {0} bytes ({1} bytes uncompressed) from {2} depots",
                 downloadCounter.totalBytesCompressed, downloadCounter.totalBytesUncompressed, depots.Count);
         }
 
@@ -1326,7 +1326,7 @@ namespace DepotDownloader
         {
             var depotCounter = new DepotDownloadCounter();
 
-            Console.WriteLine("Processing depot {0}", depot.DepotId);
+            (Config.JsonProgress ? Console.Error : Console.Out).WriteLine("Processing depot {0}", depot.DepotId);
 
             DepotManifest oldManifest = null;
             DepotManifest newManifest = null;
@@ -1360,7 +1360,7 @@ namespace DepotDownloader
 
                 if (newManifest == null)
                 {
-                    Console.WriteLine("Unable to load manifest file {0} for depot {1}", Config.ManifestFile, depot.DepotId);
+                    (Config.JsonProgress ? Console.Error : Console.Out).WriteLine("Unable to load manifest file {0} for depot {1}", Config.ManifestFile, depot.DepotId);
                     cts.Cancel();
                 }
                 else
@@ -1376,7 +1376,7 @@ namespace DepotDownloader
 
                 if (newManifest == null)
                 {
-                    Console.WriteLine("Unable to load manifest {0} for depot {1} from directory {2}", depot.ManifestId, depot.DepotId, Config.ManifestDirectory);
+                    (Config.JsonProgress ? Console.Error : Console.Out).WriteLine("Unable to load manifest {0} for depot {1} from directory {2}", depot.ManifestId, depot.DepotId, Config.ManifestDirectory);
                     cts.Cancel();
                 }
                 else
@@ -1387,7 +1387,7 @@ namespace DepotDownloader
             else if (lastManifestId == depot.ManifestId && oldManifest != null)
             {
                 newManifest = oldManifest;
-                Console.WriteLine("Already have manifest {0} for depot {1}.", depot.ManifestId, depot.DepotId);
+                (Config.JsonProgress ? Console.Error : Console.Out).WriteLine("Already have manifest {0} for depot {1}.", depot.ManifestId, depot.DepotId);
             }
             else
             {
@@ -1395,11 +1395,11 @@ namespace DepotDownloader
 
                 if (newManifest != null)
                 {
-                    Console.WriteLine("Already have manifest {0} for depot {1}.", depot.ManifestId, depot.DepotId);
+                    (Config.JsonProgress ? Console.Error : Console.Out).WriteLine("Already have manifest {0} for depot {1}.", depot.ManifestId, depot.DepotId);
                 }
                 else
                 {
-                    Console.WriteLine($"Downloading depot {depot.DepotId} manifest");
+                    (Config.JsonProgress ? Console.Error : Console.Out).WriteLine($"Downloading depot {depot.DepotId} manifest");
 
                     ulong manifestRequestCode = 0;
                     var manifestRequestCodeExpiration = DateTime.MinValue;
@@ -1460,7 +1460,7 @@ namespace DepotDownloader
                         }
                         catch (TaskCanceledException)
                         {
-                            Console.WriteLine("Connection timeout downloading depot manifest {0} {1}. Retrying.", depot.DepotId, depot.ManifestId);
+                            (Config.JsonProgress ? Console.Error : Console.Out).WriteLine("Connection timeout downloading depot manifest {0} {1}. Retrying.", depot.DepotId, depot.ManifestId);
                         }
                         catch (SteamKitWebRequestException e)
                         {
@@ -1478,17 +1478,17 @@ namespace DepotDownloader
 
                             if (e.StatusCode == HttpStatusCode.Unauthorized || e.StatusCode == HttpStatusCode.Forbidden)
                             {
-                                Console.WriteLine("Encountered {2} for depot manifest {0} {1}. Aborting.", depot.DepotId, depot.ManifestId, (int)e.StatusCode);
+                                (Config.JsonProgress ? Console.Error : Console.Out).WriteLine("Encountered {2} for depot manifest {0} {1}. Aborting.", depot.DepotId, depot.ManifestId, (int)e.StatusCode);
                                 break;
                             }
 
                             if (e.StatusCode == HttpStatusCode.NotFound)
                             {
-                                Console.WriteLine("Encountered 404 for depot manifest {0} {1}. Aborting.", depot.DepotId, depot.ManifestId);
+                                (Config.JsonProgress ? Console.Error : Console.Out).WriteLine("Encountered 404 for depot manifest {0} {1}. Aborting.", depot.DepotId, depot.ManifestId);
                                 break;
                             }
 
-                            Console.WriteLine("Encountered error downloading depot manifest {0} {1}: {2}", depot.DepotId, depot.ManifestId, e.StatusCode);
+                            (Config.JsonProgress ? Console.Error : Console.Out).WriteLine("Encountered error downloading depot manifest {0} {1}: {2}", depot.DepotId, depot.ManifestId, e.StatusCode);
                         }
                         catch (OperationCanceledException)
                         {
@@ -1497,13 +1497,13 @@ namespace DepotDownloader
                         catch (Exception e)
                         {
                             cdnPool.ReturnBrokenConnection(connection);
-                            Console.WriteLine("Encountered error downloading manifest for depot {0} {1}: {2}", depot.DepotId, depot.ManifestId, e.Message);
+                            (Config.JsonProgress ? Console.Error : Console.Out).WriteLine("Encountered error downloading manifest for depot {0} {1}: {2}", depot.DepotId, depot.ManifestId, e.Message);
                         }
                     } while (newManifest == null);
 
                     if (newManifest == null)
                     {
-                        Console.WriteLine("\nUnable to download manifest {0} for depot {1}", depot.ManifestId, depot.DepotId);
+                        (Config.JsonProgress ? Console.Error : Console.Out).WriteLine("\nUnable to download manifest {0} for depot {1}", depot.ManifestId, depot.DepotId);
                         cts.Cancel();
                     }
 
@@ -1520,12 +1520,12 @@ namespace DepotDownloader
             {
                 if (!newManifest.DecryptFilenames(depot.DepotKey))
                 {
-                    Console.WriteLine("Failed to decrypt filenames in manifest {0} for depot {1}.", depot.ManifestId, depot.DepotId);
+                    (Config.JsonProgress ? Console.Error : Console.Out).WriteLine("Failed to decrypt filenames in manifest {0} for depot {1}.", depot.ManifestId, depot.DepotId);
                     return null;
                 }
             }
 
-            Console.WriteLine("Manifest {0} ({1})", depot.ManifestId, newManifest.CreationTime);
+            (Config.JsonProgress ? Console.Error : Console.Out).WriteLine("Manifest {0} ({1})", depot.ManifestId, newManifest.CreationTime);
 
             if (Config.DownloadManifestOnly)
             {

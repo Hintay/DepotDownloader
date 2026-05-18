@@ -110,9 +110,20 @@ static class Ansi
     // plain Console when output is redirected or the terminal lacks ANSI support.
     // During Progress (progressDepth > 0) all writes are queued and rendered by
     // Progress' own render hook, which keeps all console output single-writer.
+    //
+    // When --json-progress is on, stdout is reserved for NDJSON events emitted
+    // by JsonProgressLogger. All human-readable log output from this helper is
+    // routed straight to stderr (bypassing the deferred-output queue and the
+    // Spectre live display, which target stdout) so consumers parsing stdout
+    // line-by-line don't have to filter non-JSON noise.
     public static void LogLine(string format, params object[] args)
     {
         var message = args == null || args.Length == 0 ? format : string.Format(format, args);
+        if (ContentDownloader.Config?.JsonProgress == true)
+        {
+            Console.Error.WriteLine(message);
+            return;
+        }
         if (Volatile.Read(ref progressDepth) > 0)
         {
             deferredOutput.Enqueue(message + Environment.NewLine);
@@ -131,6 +142,11 @@ static class Ansi
     public static void LogWrite(string format, params object[] args)
     {
         var message = args == null || args.Length == 0 ? format : string.Format(format, args);
+        if (ContentDownloader.Config?.JsonProgress == true)
+        {
+            Console.Error.Write(message);
+            return;
+        }
         if (Volatile.Read(ref progressDepth) > 0)
         {
             deferredOutput.Enqueue(message);

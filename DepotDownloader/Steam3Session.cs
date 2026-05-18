@@ -153,7 +153,7 @@ namespace DepotDownloader
 
             if (appTokens.AppTokensDenied.Contains(appId) && !hasLuaToken)
             {
-                Console.WriteLine("Insufficient privileges to get access token for app {0}", appId);
+                (ContentDownloader.Config.JsonProgress ? Console.Error : Console.Out).WriteLine("Insufficient privileges to get access token for app {0}", appId);
             }
 
             foreach (var token_dict in appTokens.AppTokens)
@@ -188,7 +188,7 @@ namespace DepotDownloader
                 {
                     var app = app_value.Value;
 
-                    Console.WriteLine("Got AppInfo for {0}", app.ID);
+                    (ContentDownloader.Config.JsonProgress ? Console.Error : Console.Out).WriteLine("Got AppInfo for {0}", app.ID);
                     AppInfo[app.ID] = app;
                 }
 
@@ -321,7 +321,7 @@ namespace DepotDownloader
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Failed to request FreeOnDemand license for app {appId}: {ex.Message}");
+                (ContentDownloader.Config.JsonProgress ? Console.Error : Console.Out).WriteLine($"Failed to request FreeOnDemand license for app {appId}: {ex.Message}");
                 return false;
             }
         }
@@ -710,7 +710,7 @@ namespace DepotDownloader
                 {
                     do
                     {
-                        Console.Write("Please enter your 2 factor auth code from your authenticator app: ");
+                        (ContentDownloader.Config.JsonProgress ? Console.Error : Console.Out).Write("Please enter your 2 factor auth code from your authenticator app: ");
                         logonDetails.TwoFactorCode = Console.ReadLine();
                     } while (string.Empty == logonDetails.TwoFactorCode);
                 }
@@ -728,7 +728,7 @@ namespace DepotDownloader
                 {
                     do
                     {
-                        Console.Write("Please enter the authentication code sent to your email address: ");
+                        (ContentDownloader.Config.JsonProgress ? Console.Error : Console.Out).Write("Please enter the authentication code sent to your email address: ");
                         logonDetails.AuthCode = Console.ReadLine();
                     } while (string.Empty == logonDetails.AuthCode);
                 }
