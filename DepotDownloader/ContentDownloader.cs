@@ -1641,6 +1641,11 @@ namespace DepotDownloader
                 depotsOk.Add(depotId);
                 JsonProgressLogger.EmitDepotDone(depotId, success: true);
             }
+            catch (OperationCanceledException)
+            {
+                // User cancelled — propagate without recording as a failed depot.
+                throw;
+            }
             catch (Exception ex)
             {
                 depotsFailed.Add(depotId);
