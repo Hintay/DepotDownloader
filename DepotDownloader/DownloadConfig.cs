@@ -38,6 +38,7 @@ namespace DepotDownloader
         public bool UseManifestDirectory { get; set; }
         public string ManifestDirectory { get; set; }
         public bool GenerateAppManifest { get; set; }
+        public bool JsonProgress { get; set; }
         public string AppManifestFile { get; set; }
         public bool UseLuaFile { get; set; }
         public string LuaFile { get; set; }

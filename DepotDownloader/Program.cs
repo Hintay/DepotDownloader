@@ -200,6 +200,7 @@ namespace DepotDownloader
             ContentDownloader.Config.UseManifestDirectory = HasParameter(args, "-manifestdir");
             ContentDownloader.Config.ManifestDirectory = GetParameter<string>(args, "-manifestdir");
             ContentDownloader.Config.GenerateAppManifest = HasParameter(args, "-appmanifest");
+            ContentDownloader.Config.JsonProgress = HasParameter(args, "--json-progress");
             ContentDownloader.Config.AppManifestFile = GetParameter<string>(args, "-appmanifestfile");
 
             if (ContentDownloader.Config.UseManifestFile && string.IsNullOrWhiteSpace(ContentDownloader.Config.ManifestFile))
@@ -677,6 +678,7 @@ namespace DepotDownloader
             Console.WriteLine("  -appmanifest             - Generate a minimal Steam appmanifest ACF metadata file.");
             Console.WriteLine("  -migrate-depot           - migrate matching depot-mode installs to Steam-layout without prompting.");
             Console.WriteLine("  -appmanifestfile <file>  - Write generated appmanifest ACF to a specific file.");
+            Console.WriteLine("  --json-progress          - Emit NDJSON progress events on stdout (machine-readable, suppresses some human-readable output).");
             Console.WriteLine("  -apptoken <#>            - Use Specified App Access Token.");
             Console.WriteLine("  -packagetoken <#>        - Use Specified Package Access Token.");
         }
