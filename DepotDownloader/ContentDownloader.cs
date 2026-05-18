@@ -1826,6 +1826,8 @@ namespace DepotDownloader
 
                                         fs.Seek((long)match.NewChunk.Offset, SeekOrigin.Begin);
                                         fs.Write(tmp, 0, tmp.Length);
+
+                                        depotFilesData.resumeStateStore?.MarkChunkCompleted(file, match.NewChunk, downloadCounter);
                                     }
                                 }
 
