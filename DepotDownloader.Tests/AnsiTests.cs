@@ -94,8 +94,8 @@ namespace DepotDownloader.Tests
         [Fact]
         public async Task RunWithProgressAsync_FlushesQueueOnExit()
         {
-            // Verifies the drainer + final DrainBatch in finally actually
-            // empty the queue end-to-end (lifecycle test, not state-poke).
+            // Verifies the final DrainBatch in finally actually empties the
+            // queue end-to-end (lifecycle test, not state-poke).
             var counter = new GlobalDownloadCounter();
             counter.Begin(totalSize: 100, useInteractiveProgress: false);
 

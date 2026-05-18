@@ -2,11 +2,13 @@
 // in file 'LICENSE', which is part of this source code package.
 
 using System;
+using System.Collections.Generic;
 using System.Collections.Concurrent;
-using System.Diagnostics;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Spectre.Console;
+using Spectre.Console.Rendering;
 
 namespace DepotDownloader;
 
@@ -29,23 +31,19 @@ static class Ansi
     private static bool useProgress;
 
     // Internal for tests: queue of pending writes during an active Progress.
-    // Drained by a single task spawned in RunWithProgressAsync so worker
-    // threads never call AnsiConsole concurrently with Spectre's render loop.
+    // Drained by Spectre.Console.Progress' render hook so external writes never
+    // compete with Spectre's render loop while file logs remain visible.
     internal static int progressDepth;
     internal static readonly ConcurrentQueue<string> deferredOutput = new();
-
-    private const int DrainIntervalMs = 100;
-
-    // Holds the most recent non-OCE drainer exception message. Surfaced to
-    // stderr by RunWithProgressAsync's finally block AFTER Spectre is done
-    // rendering, to avoid the very race the drainer exists to prevent.
-    private static string lastDrainerError;
+    private static readonly object progressRenderLock = new();
+    private static readonly List<string> progressLogLines = [];
+    private static readonly StringBuilder progressLogFragment = new();
 
     internal static void ResetForTests()
     {
         progressDepth = 0;
-        lastDrainerError = null;
         while (deferredOutput.TryDequeue(out _)) { }
+        ClearProgressRenderState();
     }
 
     public static bool CanUseInteractiveProgress => !Console.IsInputRedirected && !Console.IsOutputRedirected;
@@ -110,8 +108,8 @@ static class Ansi
     // Routes through AnsiConsole when interactive so writes interleave correctly
     // with a live Progress display instead of corrupting the bar; falls back to
     // plain Console when output is redirected or the terminal lacks ANSI support.
-    // During Progress (progressDepth > 0) all writes are queued and flushed by
-    // the single drainer task in RunWithProgressAsync — see DrainLoopAsync.
+    // During Progress (progressDepth > 0) all writes are queued and rendered by
+    // Progress' own render hook, which keeps all console output single-writer.
     public static void LogLine(string format, params object[] args)
     {
         var message = args == null || args.Length == 0 ? format : string.Format(format, args);
@@ -148,32 +146,6 @@ static class Ansi
         }
     }
 
-    private static async Task DrainLoopAsync(CancellationToken ct)
-    {
-        while (!ct.IsCancellationRequested)
-        {
-            try
-            {
-                await Task.Delay(DrainIntervalMs, ct).ConfigureAwait(false);
-                DrainBatch();
-            }
-            catch (OperationCanceledException)
-            {
-                // Expected on shutdown — exit the loop.
-                return;
-            }
-            catch (Exception ex)
-            {
-                // Drainer should never bring down the download and must keep
-                // running so the queue continues to flush. Record the error;
-                // RunWithProgressAsync's finally surfaces it to stderr after
-                // Spectre has finished rendering (so the message itself can't
-                // race the bar).
-                lastDrainerError = ex.Message;
-            }
-        }
-    }
-
     private static void DrainBatch()
     {
         while (deferredOutput.TryDequeue(out var text))
@@ -189,24 +161,81 @@ static class Ansi
         }
     }
 
-    // Not designed for nested invocations — a second concurrent caller would
-    // spawn a second drainer racing the first over deferredOutput, and the
-    // inner finally would Decrement to depth=1 then DrainBatch directly to
-    // AnsiConsole while the outer Progress is still live (re-introducing the
-    // race this method exists to fix). DepotDownloader's single download
-    // pipeline guarantees one caller at a time.
+    private static IRenderable RenderProgressWithLogs(IRenderable progressRenderable, IReadOnlyList<ProgressTask> tasks)
+    {
+        lock (progressRenderLock)
+        {
+            DrainDeferredOutputToProgressRows();
+
+            if (progressLogLines.Count == 0 && progressLogFragment.Length == 0)
+            {
+                return progressRenderable;
+            }
+
+            var rows = new List<IRenderable>(progressLogLines.Count + 2);
+            foreach (var line in progressLogLines)
+            {
+                rows.Add(new Text(line));
+            }
+
+            if (progressLogFragment.Length > 0)
+            {
+                rows.Add(new Text(progressLogFragment.ToString()));
+            }
+
+            rows.Add(progressRenderable);
+            return new Rows(rows);
+        }
+    }
+
+    private static void DrainDeferredOutputToProgressRows()
+    {
+        while (deferredOutput.TryDequeue(out var text))
+        {
+            AppendProgressText(text);
+        }
+    }
+
+    private static void AppendProgressText(string text)
+    {
+        foreach (var ch in text)
+        {
+            if (ch == '\r')
+            {
+                continue;
+            }
+
+            if (ch == '\n')
+            {
+                progressLogLines.Add(progressLogFragment.ToString());
+                progressLogFragment.Clear();
+                continue;
+            }
+
+            progressLogFragment.Append(ch);
+        }
+    }
+
+    private static void ClearProgressRenderState()
+    {
+        lock (progressRenderLock)
+        {
+            progressLogLines.Clear();
+            progressLogFragment.Clear();
+        }
+    }
+
     public static async Task RunWithProgressAsync(GlobalDownloadCounter counter, Func<Task> action)
     {
-        var newDepth = Interlocked.Increment(ref progressDepth);
-        Debug.Assert(newDepth == 1, "RunWithProgressAsync is not reentrant");
-        using var drainerCts = new CancellationTokenSource();
-        var drainerTask = Task.Run(() => DrainLoopAsync(drainerCts.Token));
+        ClearProgressRenderState();
+        Interlocked.Increment(ref progressDepth);
 
         try
         {
             await AnsiConsole.Progress()
                 .AutoClear(false)
                 .HideCompleted(false)
+                .UseRenderHook(RenderProgressWithLogs)
                 .Columns(
                     new TaskDescriptionColumn { Alignment = Justify.Left },
                     new ProgressBarColumn { Width = 40 },
@@ -234,19 +263,10 @@ static class Ansi
         }
         finally
         {
-            drainerCts.Cancel();
-            try { await drainerTask.ConfigureAwait(false); }
-            catch (OperationCanceledException) { /* expected */ }
-            Interlocked.Decrement(ref progressDepth);
-            DrainBatch();   // final pass — progressDepth is 0, writes go to console directly
-
-            // Now safe to surface any drainer error: Spectre is no longer painting,
-            // stderr won't interleave with the bar.
-            var err = lastDrainerError;
-            if (err != null)
+            if (Interlocked.Decrement(ref progressDepth) == 0)
             {
-                lastDrainerError = null;
-                Console.Error.WriteLine($"Ansi drainer error: {err}");
+                DrainBatch();
+                ClearProgressRenderState();
             }
         }
     }
