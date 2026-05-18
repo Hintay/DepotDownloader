@@ -1118,6 +1118,7 @@ namespace DepotDownloader
             public DepotDownloadInfo depotDownloadInfo;
             public DepotDownloadCounter depotCounter;
             public string stagingDir;
+            public ResumeStateStore resumeStateStore;
             public DepotManifest manifest;
             public DepotManifest previousManifest;
             public List<DepotManifest.FileData> filteredFiles;
@@ -1129,6 +1130,20 @@ namespace DepotDownloader
             public FileStream fileStream;
             public SemaphoreSlim fileLock;
             public int chunksToDownload;
+        }
+
+        private static void CreditCompletedChunk(
+            GlobalDownloadCounter downloadCounter,
+            DepotDownloadCounter depotDownloadCounter,
+            DepotManifest.ChunkData chunk)
+        {
+            lock (depotDownloadCounter)
+            {
+                depotDownloadCounter.sizeDownloaded += chunk.UncompressedLength;
+            }
+
+            downloadCounter.AddCompletedBytes(chunk.UncompressedLength);
+            downloadCounter.AddCompletedChunks(1);
         }
 
         private class DepotDownloadCounter
@@ -1186,9 +1201,33 @@ namespace DepotDownloader
             // arithmetic on already-decoded manifests — no I/O.
             foreach (var depotFileData in depotsToDownload)
             {
+                var depot = depotFileData.depotDownloadInfo;
+                depotFileData.resumeStateStore = ResumeStateStore.Open(
+                    DepotConfigStore.ConfigDirectory,
+                    depot.AppId,
+                    depot.DepotId,
+                    depot.ManifestId,
+                    depot.InstallDir,
+                    depotFileData.filteredFiles,
+                    Config.VerifyAll,
+                    downloadCounter);
+
                 depotFileData.depotCounter.totalChunks = depotFileData.filteredFiles
                     .Where(f => !f.Flags.HasFlag(EDepotFileFlag.Directory))
                     .Sum(f => f.Chunks.Count);
+
+                foreach (var file in depotFileData.filteredFiles.Where(f => !f.Flags.HasFlag(EDepotFileFlag.Directory)))
+                {
+                    var fileFinalPath = Path.Combine(depot.InstallDir, file.FileName);
+                    if (!File.Exists(fileFinalPath))
+                    {
+                        continue;
+                    }
+
+                    var oldManifestFile = depotFileData.previousManifest?.Files.SingleOrDefault(f => f.FileName == file.FileName);
+                    var (verifyBytes, verifyChunks) = GetVerifyWorkForExistingFile(file, oldManifestFile, depotFileData.resumeStateStore, fileFinalPath);
+                    downloadCounter.RegisterVerifyWork(verifyBytes, verifyChunks);
+                }
             }
 
             var useInteractiveProgress = Ansi.CanUseInteractiveProgress && downloadCounter.completeDownloadSize > 0;
@@ -1475,14 +1514,6 @@ namespace DepotDownloader
                     downloadCounter.completeDownloadSize += file.TotalSize;
                     depotCounter.completeDownloadSize += file.TotalSize;
 
-                    // Pre-register only the chunks that will actually be verified so the
-                    // verify row stays hidden when validation can be skipped.
-                    if (File.Exists(fileFinalPath))
-                    {
-                        var oldManifestFile = oldManifest?.Files.SingleOrDefault(f => f.FileName == file.FileName);
-                        var (verifyBytes, verifyChunks) = GetVerifyWorkForExistingFile(file, oldManifestFile);
-                        downloadCounter.RegisterVerifyWork(verifyBytes, verifyChunks);
-                    }
                 }
             });
 
@@ -1500,8 +1531,17 @@ namespace DepotDownloader
 
         private static (ulong bytes, int chunks) GetVerifyWorkForExistingFile(
             DepotManifest.FileData file,
-            DepotManifest.FileData oldManifestFile)
+            DepotManifest.FileData oldManifestFile,
+            ResumeStateStore resumeStateStore,
+            string fileFinalPath)
         {
+            if (resumeStateStore?.CanUseForResume == true
+                && resumeStateStore.State.HasCompletedChunks(file)
+                && new FileInfo(fileFinalPath).Length == (long)file.TotalSize)
+            {
+                return (0, 0);
+            }
+
             if (oldManifestFile == null)
             {
                 return (file.TotalSize, file.Chunks.Count);
@@ -1548,19 +1588,26 @@ namespace DepotDownloader
                 CancellationToken = cts.Token
             };
 
-            await Parallel.ForEachAsync(files, parallelOptions, async (file, cancellationToken) =>
+            try
             {
-                await Task.Yield();
-                DownloadSteam3AsyncDepotFile(cts, downloadCounter, depotFilesData, file, networkChunkQueue);
-            });
+                await Parallel.ForEachAsync(files, parallelOptions, async (file, cancellationToken) =>
+                {
+                    await Task.Yield();
+                    DownloadSteam3AsyncDepotFile(cts, downloadCounter, depotFilesData, file, networkChunkQueue);
+                });
 
-            await Parallel.ForEachAsync(networkChunkQueue, parallelOptions, async (q, cancellationToken) =>
+                await Parallel.ForEachAsync(networkChunkQueue, parallelOptions, async (q, cancellationToken) =>
+                {
+                    await DownloadSteam3AsyncDepotFileChunk(
+                        cts, downloadCounter, depotFilesData,
+                        q.fileData, q.fileStreamData, q.chunk
+                    );
+                });
+            }
+            finally
             {
-                await DownloadSteam3AsyncDepotFileChunk(
-                    cts, downloadCounter, depotFilesData,
-                    q.fileData, q.fileStreamData, q.chunk
-                );
-            });
+                depotFilesData.resumeStateStore?.SaveIfDirty(downloadCounter, force: true);
+            }
 
             // Check for deleted files if updating the depot.
             if (depotFilesData.previousManifest != null)
@@ -1593,6 +1640,7 @@ namespace DepotDownloader
 
             DepotConfigStore.Instance.InstalledManifestIDs[depot.DepotId] = depot.ManifestId;
             DepotConfigStore.Save();
+            depotFilesData.resumeStateStore?.Delete(downloadCounter);
 
             downloadCounter.InteractiveLog("Depot {0} - Downloaded {1} bytes ({2} bytes uncompressed)", depot.DepotId, depotCounter.depotBytesCompressed, depotCounter.depotBytesUncompressed);
         }
@@ -1643,173 +1691,215 @@ namespace DepotDownloader
                     throw new ContentDownloaderException(string.Format("Failed to allocate file {0}: {1}", fileFinalPath, ex.Message));
                 }
 
+                depotFilesData.resumeStateStore?.ClearFile(file, downloadCounter);
                 neededChunks = new List<DepotManifest.ChunkData>(file.Chunks);
             }
             else
             {
-                // open existing
-                var didValidatePerChunk = false;
-
-                if (oldManifestFile != null)
+                var resumeStateStore = depotFilesData.resumeStateStore;
+                if (resumeStateStore?.CanUseForResume == true
+                    && !Config.VerifyAll
+                    && (ulong)fi.Length == file.TotalSize
+                    && resumeStateStore.State.HasCompletedChunks(file))
                 {
                     neededChunks = [];
 
-                    var hashMatches = oldManifestFile.FileHash.SequenceEqual(file.FileHash);
-                    if (Config.VerifyAll || !hashMatches)
+                    foreach (var chunk in file.Chunks)
                     {
-                        // we have a version of this file, but it doesn't fully match what we want
-                        if (Config.VerifyAll)
+                        if (resumeStateStore.State.IsChunkCompleted(file, chunk))
                         {
-                            downloadCounter.InteractiveLog("Validating {0}", fileFinalPath);
+                            CreditCompletedChunk(downloadCounter, depotDownloadCounter, chunk);
+                        }
+                        else
+                        {
+                            neededChunks.Add(chunk);
+                        }
+                    }
+
+                    if (neededChunks.Count == 0)
+                    {
+                        float depotPercent;
+                        lock (depotDownloadCounter)
+                        {
+                            depotPercent = (depotDownloadCounter.sizeDownloaded / (float)depotDownloadCounter.completeDownloadSize) * 100.0f;
                         }
 
-                        var matchingChunks = new List<ChunkMatch>();
+                        downloadCounter.FileCompleted(depotPercent, fileFinalPath);
 
-                        foreach (var chunk in file.Chunks)
-                        {
-                            var oldChunk = oldManifestFile.Chunks.FirstOrDefault(c => c.ChunkID.SequenceEqual(chunk.ChunkID));
-                            if (oldChunk != null)
-                            {
-                                matchingChunks.Add(new ChunkMatch(oldChunk, chunk));
-                            }
-                            else
-                            {
-                                neededChunks.Add(chunk);
-                            }
-                        }
-
-                        var orderedChunks = matchingChunks.OrderBy(x => x.OldChunk.Offset);
-
-                        var copyChunks = new List<ChunkMatch>();
-
-                        didValidatePerChunk = true;
-
-                        using (var fsOld = File.Open(fileFinalPath, FileMode.Open))
-                        {
-                            foreach (var match in orderedChunks)
-                            {
-                                fsOld.Seek((long)match.OldChunk.Offset, SeekOrigin.Begin);
-
-                                var adler = Util.AdlerHash(fsOld, (int)match.OldChunk.UncompressedLength);
-                                downloadCounter.AddVerifiedChunk(match.OldChunk.UncompressedLength);
-
-                                if (!adler.SequenceEqual(BitConverter.GetBytes(match.OldChunk.Checksum)))
-                                {
-                                    neededChunks.Add(match.NewChunk);
-                                }
-                                else
-                                {
-                                    copyChunks.Add(match);
-
-                                    lock (depotDownloadCounter)
-                                    {
-                                        depotDownloadCounter.sizeDownloaded += match.NewChunk.UncompressedLength;
-                                    }
-
-                                    downloadCounter.AddCompletedBytes(match.NewChunk.UncompressedLength);
-                                    downloadCounter.AddCompletedChunks(1);
-                                }
-                            }
-                        }
-
-                        if (!hashMatches || neededChunks.Count > 0)
-                        {
-                            File.Move(fileFinalPath, fileStagingPath);
-
-                            using (var fsOld = File.Open(fileStagingPath, FileMode.Open))
-                            {
-                                using var fs = File.Open(fileFinalPath, FileMode.Create);
-                                try
-                                {
-                                    fs.SetLength((long)file.TotalSize);
-                                }
-                                catch (IOException ex)
-                                {
-                                    throw new ContentDownloaderException(string.Format("Failed to resize file to expected size {0}: {1}", fileFinalPath, ex.Message));
-                                }
-
-                                foreach (var match in copyChunks)
-                                {
-                                    fsOld.Seek((long)match.OldChunk.Offset, SeekOrigin.Begin);
-
-                                    var tmp = new byte[match.OldChunk.UncompressedLength];
-                                    fsOld.ReadExactly(tmp);
-
-                                    fs.Seek((long)match.NewChunk.Offset, SeekOrigin.Begin);
-                                    fs.Write(tmp, 0, tmp.Length);
-                                }
-                            }
-
-                            File.Delete(fileStagingPath);
-                        }
+                        return;
                     }
                 }
                 else
                 {
-                    // No old manifest or file not in old manifest. We must validate.
-
-                    using var fs = File.Open(fileFinalPath, FileMode.Open);
-                    if ((ulong)fi.Length != file.TotalSize)
+                    if (resumeStateStore?.CanUseForResume == true && resumeStateStore.State.HasCompletedChunks(file))
                     {
-                        try
-                        {
-                            fs.SetLength((long)file.TotalSize);
-                        }
-                        catch (IOException ex)
-                        {
-                            throw new ContentDownloaderException(string.Format("Failed to allocate file {0}: {1}", fileFinalPath, ex.Message));
-                        }
+                        resumeStateStore.ClearFile(file, downloadCounter);
                     }
 
-                    downloadCounter.InteractiveLog("Validating {0}", fileFinalPath);
-                    didValidatePerChunk = true;
+                    // open existing
+                    var didValidatePerChunk = false;
 
-                    neededChunks = Util.ValidateSteam3FileChecksums(
-                        fs,
-                        [.. file.Chunks.OrderBy(x => x.Offset)],
-                        (chunk, matched) =>
+                    if (oldManifestFile != null)
+                    {
+                        neededChunks = [];
+
+                        var hashMatches = oldManifestFile.FileHash.SequenceEqual(file.FileHash);
+                        if (Config.VerifyAll || !hashMatches)
                         {
-                            downloadCounter.AddVerifiedChunk(chunk.UncompressedLength);
-
-                            if (matched)
+                            // we have a version of this file, but it doesn't fully match what we want
+                            if (Config.VerifyAll)
                             {
-                                lock (depotDownloadCounter)
+                                downloadCounter.InteractiveLog("Validating {0}", fileFinalPath);
+                            }
+
+                            var matchingChunks = new List<ChunkMatch>();
+
+                            foreach (var chunk in file.Chunks)
+                            {
+                                var oldChunk = oldManifestFile.Chunks.FirstOrDefault(c => c.ChunkID.SequenceEqual(chunk.ChunkID));
+                                if (oldChunk != null)
                                 {
-                                    depotDownloadCounter.sizeDownloaded += chunk.UncompressedLength;
+                                    matchingChunks.Add(new ChunkMatch(oldChunk, chunk));
+                                }
+                                else
+                                {
+                                    neededChunks.Add(chunk);
+                                }
+                            }
+
+                            var orderedChunks = matchingChunks.OrderBy(x => x.OldChunk.Offset);
+
+                            var copyChunks = new List<ChunkMatch>();
+
+                            didValidatePerChunk = true;
+
+                            using (var fsOld = File.Open(fileFinalPath, FileMode.Open))
+                            {
+                                foreach (var match in orderedChunks)
+                                {
+                                    fsOld.Seek((long)match.OldChunk.Offset, SeekOrigin.Begin);
+
+                                    var adler = Util.AdlerHash(fsOld, (int)match.OldChunk.UncompressedLength);
+                                    downloadCounter.AddVerifiedChunk(match.OldChunk.UncompressedLength);
+
+                                    if (!adler.SequenceEqual(BitConverter.GetBytes(match.OldChunk.Checksum)))
+                                    {
+                                        neededChunks.Add(match.NewChunk);
+                                    }
+                                    else
+                                    {
+                                        copyChunks.Add(match);
+
+                                        lock (depotDownloadCounter)
+                                        {
+                                            depotDownloadCounter.sizeDownloaded += match.NewChunk.UncompressedLength;
+                                        }
+
+                                        downloadCounter.AddCompletedBytes(match.NewChunk.UncompressedLength);
+                                        downloadCounter.AddCompletedChunks(1);
+                                    }
+                                }
+                            }
+
+                            if (!hashMatches || neededChunks.Count > 0)
+                            {
+                                File.Move(fileFinalPath, fileStagingPath);
+
+                                using (var fsOld = File.Open(fileStagingPath, FileMode.Open))
+                                {
+                                    using var fs = File.Open(fileFinalPath, FileMode.Create);
+                                    try
+                                    {
+                                        fs.SetLength((long)file.TotalSize);
+                                    }
+                                    catch (IOException ex)
+                                    {
+                                        throw new ContentDownloaderException(string.Format("Failed to resize file to expected size {0}: {1}", fileFinalPath, ex.Message));
+                                    }
+
+                                    foreach (var match in copyChunks)
+                                    {
+                                        fsOld.Seek((long)match.OldChunk.Offset, SeekOrigin.Begin);
+
+                                        var tmp = new byte[match.OldChunk.UncompressedLength];
+                                        fsOld.ReadExactly(tmp);
+
+                                        fs.Seek((long)match.NewChunk.Offset, SeekOrigin.Begin);
+                                        fs.Write(tmp, 0, tmp.Length);
+                                    }
                                 }
 
-                                downloadCounter.AddCompletedBytes(chunk.UncompressedLength);
-                                downloadCounter.AddCompletedChunks(1);
+                                File.Delete(fileStagingPath);
                             }
-                        });
-                }
-
-                if (neededChunks.Count == 0)
-                {
-                    if (!didValidatePerChunk)
+                        }
+                    }
+                    else
                     {
-                        // Old manifest hash matched and verification was skipped - credit the entire file at once.
-                        lock (depotDownloadCounter)
+                        // No old manifest or file not in old manifest. We must validate.
+
+                        using var fs = File.Open(fileFinalPath, FileMode.Open);
+                        if ((ulong)fi.Length != file.TotalSize)
                         {
-                            depotDownloadCounter.sizeDownloaded += file.TotalSize;
+                            try
+                            {
+                                fs.SetLength((long)file.TotalSize);
+                            }
+                            catch (IOException ex)
+                            {
+                                throw new ContentDownloaderException(string.Format("Failed to allocate file {0}: {1}", fileFinalPath, ex.Message));
+                            }
                         }
 
-                        downloadCounter.AddCompletedBytes(file.TotalSize);
-                        downloadCounter.AddCompletedChunks(file.Chunks.Count);
+                        downloadCounter.InteractiveLog("Validating {0}", fileFinalPath);
+                        didValidatePerChunk = true;
+
+                        neededChunks = Util.ValidateSteam3FileChecksums(
+                            fs,
+                            [.. file.Chunks.OrderBy(x => x.Offset)],
+                            (chunk, matched) =>
+                            {
+                                downloadCounter.AddVerifiedChunk(chunk.UncompressedLength);
+
+                                if (matched)
+                                {
+                                    lock (depotDownloadCounter)
+                                    {
+                                        depotDownloadCounter.sizeDownloaded += chunk.UncompressedLength;
+                                    }
+
+                                    downloadCounter.AddCompletedBytes(chunk.UncompressedLength);
+                                    downloadCounter.AddCompletedChunks(1);
+                                }
+                            });
                     }
 
-                    float depotPercent;
-                    lock (depotDownloadCounter)
+                    if (neededChunks.Count == 0)
                     {
-                        depotPercent = (depotDownloadCounter.sizeDownloaded / (float)depotDownloadCounter.completeDownloadSize) * 100.0f;
+                        if (!didValidatePerChunk)
+                        {
+                            // Old manifest hash matched and verification was skipped - credit the entire file at once.
+                            lock (depotDownloadCounter)
+                            {
+                                depotDownloadCounter.sizeDownloaded += file.TotalSize;
+                            }
+
+                            downloadCounter.AddCompletedBytes(file.TotalSize);
+                            downloadCounter.AddCompletedChunks(file.Chunks.Count);
+                        }
+
+                        float depotPercent;
+                        lock (depotDownloadCounter)
+                        {
+                            depotPercent = (depotDownloadCounter.sizeDownloaded / (float)depotDownloadCounter.completeDownloadSize) * 100.0f;
+                        }
+
+                        downloadCounter.FileCompleted(depotPercent, fileFinalPath);
+
+                        return;
                     }
 
-                    downloadCounter.FileCompleted(depotPercent, fileFinalPath);
-
-                    return;
+                    // Per-chunk validation already credited the matched bytes to sizeDownloaded / completeDownloadSize.
                 }
-
-                // Per-chunk validation already credited the matched bytes to sizeDownloaded / completeDownloadSize.
             }
 
             var fileIsExecutable = file.Flags.HasFlag(EDepotFileFlag.Executable);
@@ -1984,6 +2074,7 @@ namespace DepotDownloader
                 downloadCounter.totalBytesUncompressed += chunk.UncompressedLength;
             }
 
+            depotFilesData.resumeStateStore?.MarkChunkCompleted(file, chunk, downloadCounter);
             downloadCounter.AddCompletedChunk(chunk.UncompressedLength, (ulong)written, diskStopwatch.Elapsed);
 
             if (remainingChunks == 0)

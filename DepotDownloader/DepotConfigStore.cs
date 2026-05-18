@@ -33,6 +33,17 @@ namespace DepotDownloader
 
         public static DepotConfigStore Instance;
 
+        public static string ConfigDirectory
+        {
+            get
+            {
+                if (!Loaded)
+                    throw new Exception("Read config directory before loading");
+
+                return Path.GetDirectoryName(Instance.FileName);
+            }
+        }
+
         public static void LoadFromFile(string filename)
         {
             if (Loaded)
