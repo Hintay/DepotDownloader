@@ -1181,12 +1181,22 @@ namespace DepotDownloader
                 }
             }
 
+            // Compute per-depot totalChunks AFTER any de-dup pruning above, so
+            // the grand-total seed reflects the actual download set. Pure
+            // arithmetic on already-decoded manifests — no I/O.
+            foreach (var depotFileData in depotsToDownload)
+            {
+                depotFileData.depotCounter.totalChunks = depotFileData.filteredFiles
+                    .Where(f => !f.Flags.HasFlag(EDepotFileFlag.Directory))
+                    .Sum(f => f.Chunks.Count);
+            }
+
             var useInteractiveProgress = Ansi.CanUseInteractiveProgress && downloadCounter.completeDownloadSize > 0;
             var totalDownloadSize = downloadCounter.completeDownloadSize;
 
-            // Sum manifest-precomputed chunk totals across all depots and seed
-            // the global counter once, so the bar's C N/M denominator is final
-            // from the first Progress frame instead of growing depot-by-depot.
+            // Sum chunk totals across all depots and seed the global counter
+            // once, so the bar's C N/M denominator is final from the first
+            // Progress frame instead of growing depot-by-depot.
             var grandTotalChunks = depotsToDownload.Sum(d => d.depotCounter.totalChunks);
             downloadCounter.RegisterDepotChunks(0, grandTotalChunks);
 
@@ -1442,13 +1452,6 @@ namespace DepotDownloader
 
             var filesAfterExclusions = newManifest.Files.AsParallel().Where(f => TestIsFileIncluded(f.FileName)).ToList();
             var allFileNames = new HashSet<string>(filesAfterExclusions.Count);
-
-            // Pre-compute total chunks for this depot from the manifest (pure
-            // arithmetic, no I/O). The grand total across all depots is what
-            // the bar's C N/M denominator displays from frame 1.
-            depotCounter.totalChunks = filesAfterExclusions
-                .Where(f => !f.Flags.HasFlag(EDepotFileFlag.Directory))
-                .Sum(f => f.Chunks.Count);
 
             // Pre-process
             filesAfterExclusions.ForEach(file =>
