@@ -4,9 +4,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.IO.Compression;
 using DepotDownloader;
-using ProtoBuf;
 using Xunit;
 
 namespace DepotDownloader.Tests

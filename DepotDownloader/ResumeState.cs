@@ -164,13 +164,17 @@ namespace DepotDownloader
         [ProtoMember(5)]
         public byte[] CompletedChunks { get; private set; }
 
+        [ProtoMember(6)]
+        public List<ulong> ChunkOffsets { get; private set; }
+
         [ProtoIgnore]
-        Dictionary<string, int> chunkIndexById;
+        Dictionary<ChunkKey, int> chunkIndexByIdentity;
 
         ResumeFileState()
         {
             ChunkIds = [];
             CompletedChunks = [];
+            ChunkOffsets = [];
         }
 
         public ResumeFileState(DepotManifest.FileData file)
@@ -179,6 +183,7 @@ namespace DepotDownloader
             TotalSize = file.TotalSize;
             FileHash = file.FileHash;
             ChunkIds = file.Chunks.Select(chunk => chunk.ChunkID).ToList();
+            ChunkOffsets = file.Chunks.Select(chunk => chunk.Offset).ToList();
             CompletedChunks = new byte[(ChunkIds.Count + 7) / 8];
         }
 
@@ -193,9 +198,14 @@ namespace DepotDownloader
                 return false;
             }
 
+            if (!EnsureChunkOffsets(file))
+            {
+                return false;
+            }
+
             for (var i = 0; i < ChunkIds.Count; i++)
             {
-                if (!ChunkIds[i].SequenceEqual(file.Chunks[i].ChunkID))
+                if (!ChunkIds[i].SequenceEqual(file.Chunks[i].ChunkID) || ChunkOffsets[i] != file.Chunks[i].Offset)
                 {
                     return false;
                 }
@@ -203,6 +213,17 @@ namespace DepotDownloader
 
             RebuildLookup();
             return true;
+        }
+
+        bool EnsureChunkOffsets(DepotManifest.FileData file)
+        {
+            if (ChunkOffsets == null || ChunkOffsets.Count == 0)
+            {
+                ChunkOffsets = file.Chunks.Select(chunk => chunk.Offset).ToList();
+                chunkIndexByIdentity = null;
+            }
+
+            return ChunkOffsets.Count == file.Chunks.Count;
         }
 
         public bool HasCompletedChunks()
@@ -236,7 +257,7 @@ namespace DepotDownloader
         bool TryGetChunkIndex(DepotManifest.ChunkData chunk, out int index)
         {
             RebuildLookup();
-            return chunkIndexById.TryGetValue(Convert.ToHexString(chunk.ChunkID), out index);
+            return chunkIndexByIdentity.TryGetValue(ChunkKey.From(chunk), out index);
         }
 
         bool IsBitSet(int index)
@@ -246,9 +267,17 @@ namespace DepotDownloader
 
         void RebuildLookup()
         {
-            chunkIndexById ??= ChunkIds
-                .Select((chunkId, index) => (chunkId: Convert.ToHexString(chunkId), index))
-                .ToDictionary(item => item.chunkId, item => item.index, StringComparer.Ordinal);
+            chunkIndexByIdentity ??= ChunkIds
+                .Select((chunkId, index) => (key: new ChunkKey(Convert.ToHexString(chunkId), ChunkOffsets[index]), index))
+                .ToDictionary(item => item.key, item => item.index);
+        }
+
+        readonly record struct ChunkKey(string Id, ulong Offset)
+        {
+            public static ChunkKey From(DepotManifest.ChunkData chunk)
+            {
+                return new ChunkKey(Convert.ToHexString(chunk.ChunkID), chunk.Offset);
+            }
         }
     }
 }

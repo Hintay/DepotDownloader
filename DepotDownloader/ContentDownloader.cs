@@ -1146,6 +1146,30 @@ namespace DepotDownloader
             downloadCounter.AddCompletedChunks(1);
         }
 
+        internal static void RecordValidatedChunkCompleted(
+            ResumeStateStore resumeStateStore,
+            DepotManifest.FileData file,
+            DepotManifest.ChunkData chunk,
+            bool matched,
+            GlobalDownloadCounter downloadCounter)
+        {
+            if (matched)
+            {
+                resumeStateStore?.MarkChunkCompleted(file, chunk, downloadCounter);
+            }
+        }
+
+        internal static bool ShouldTreatExistingFileAsPreallocatedEmpty(
+            ResumeStateStore resumeStateStore,
+            DepotManifest.FileData file,
+            FileInfo fileInfo)
+        {
+            return resumeStateStore?.CanUseForResume == true
+                && !Config.VerifyAll
+                && (ulong)fileInfo.Length == file.TotalSize
+                && !resumeStateStore.State.HasCompletedChunks(file);
+        }
+
         private class DepotDownloadCounter
         {
             public ulong completeDownloadSize;
@@ -1529,15 +1553,22 @@ namespace DepotDownloader
             };
         }
 
-        private static (ulong bytes, int chunks) GetVerifyWorkForExistingFile(
+        internal static (ulong bytes, int chunks) GetVerifyWorkForExistingFile(
             DepotManifest.FileData file,
             DepotManifest.FileData oldManifestFile,
             ResumeStateStore resumeStateStore,
             string fileFinalPath)
         {
+            var fileInfo = new FileInfo(fileFinalPath);
+
+            if (ShouldTreatExistingFileAsPreallocatedEmpty(resumeStateStore, file, fileInfo))
+            {
+                return (0, 0);
+            }
+
             if (resumeStateStore?.CanUseForResume == true
                 && resumeStateStore.State.HasCompletedChunks(file)
-                && new FileInfo(fileFinalPath).Length == (long)file.TotalSize)
+                && fileInfo.Length == (long)file.TotalSize)
             {
                 return (0, 0);
             }
@@ -1697,7 +1728,11 @@ namespace DepotDownloader
             else
             {
                 var resumeStateStore = depotFilesData.resumeStateStore;
-                if (resumeStateStore?.CanUseForResume == true
+                if (ShouldTreatExistingFileAsPreallocatedEmpty(resumeStateStore, file, fi))
+                {
+                    neededChunks = new List<DepotManifest.ChunkData>(file.Chunks);
+                }
+                else if (resumeStateStore?.CanUseForResume == true
                     && !Config.VerifyAll
                     && (ulong)fi.Length == file.TotalSize
                     && resumeStateStore.State.HasCompletedChunks(file))
@@ -1797,6 +1832,7 @@ namespace DepotDownloader
 
                                         downloadCounter.AddCompletedBytes(match.NewChunk.UncompressedLength);
                                         downloadCounter.AddCompletedChunks(1);
+                                        RecordValidatedChunkCompleted(depotFilesData.resumeStateStore, file, match.NewChunk, matched: true, downloadCounter);
                                     }
                                 }
                             }
@@ -1871,6 +1907,7 @@ namespace DepotDownloader
 
                                     downloadCounter.AddCompletedBytes(chunk.UncompressedLength);
                                     downloadCounter.AddCompletedChunks(1);
+                                    RecordValidatedChunkCompleted(depotFilesData.resumeStateStore, file, chunk, matched: true, downloadCounter);
                                 }
                             });
                     }

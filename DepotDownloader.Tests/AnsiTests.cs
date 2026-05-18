@@ -2,7 +2,6 @@
 // in file 'LICENSE', which is part of this source code package.
 
 using System.Linq;
-using System.Threading;
 using System.Threading.Tasks;
 using DepotDownloader;
 using Xunit;
