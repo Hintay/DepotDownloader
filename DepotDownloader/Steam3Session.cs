@@ -769,6 +769,10 @@ namespace DepotDownloader
             this.seq++;
             IsLoggedOn = true;
 
+            // Build a short CM endpoint description for diagnostics
+            var cmEndpoint = steamClient?.CurrentEndPoint?.ToString() ?? string.Empty;
+            JsonProgressLogger.EmitSessionReady(cmEndpoint);
+
             if (ContentDownloader.Config.CellID == 0)
             {
                 Ansi.LogLine("Using Steam3 suggested CellID: " + loggedOn.CellID);
