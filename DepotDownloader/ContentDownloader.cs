@@ -511,527 +511,540 @@ namespace DepotDownloader
 
         public static async Task DownloadAppAsync(uint appId, List<(uint depotId, ulong manifestId)> depotManifestIds, string branch, string os, string arch, string language, bool lv, bool isUgc)
         {
-            cdnPool = new CDNClientPool(steam3, appId);
-
-            await steam3?.RequestAppInfo(appId);
-
-            // Activate Steam-style library layout when the user didn't pin a -dir,
-            // isn't doing UGC, and didn't pass an explicit -depot. In that case all
-            // depots of the app get merged into ./steamapps/common/<installdir>/ and
-            // the .acf state file lives alongside, matching Steam's on-disk convention.
-            var steamLayoutActive = string.IsNullOrWhiteSpace(Config.InstallDirectory)
-                                    && !isUgc
-                                    && !Config.HasExplicitDepots;
-            if (steamLayoutActive)
+            JsonProgressLogger.EmitAppStart(appId, depotManifestIds.Select(x => x.depotId));
+            var depotsOk = new List<uint>();
+            var depotsFailed = new List<uint>();
+            var appSuccess = false;
+            try
             {
-                Config.InstallDirectory = Path.Combine(STEAMAPPS_DIR, "common", GetAppInstallDir(appId));
-            }
+                cdnPool = new CDNClientPool(steam3, appId);
 
-            // Load our configuration data containing the depots currently installed
-            var configPath = Config.InstallDirectory;
-            if (string.IsNullOrWhiteSpace(configPath))
-            {
-                configPath = DEFAULT_DOWNLOAD_DIR;
-            }
-            if (steamLayoutActive)
-            {
-                // Library-level state root: depot.config and appmanifest_<id>.acf live at
-                // ./steamapps/, not nested inside ./steamapps/common/<installdir>/.
-                configPath = STEAMAPPS_DIR;
-            }
+                await steam3?.RequestAppInfo(appId);
 
-            // Local helpers — declared after configPath is finalized so the path
-            // resolver can capture it. C# local functions require their captured
-            // locals to be declared earlier in textual order (CS0841).
-            bool ShouldWriteAppManifest() => steamLayoutActive || Config.GenerateAppManifest;
-
-            string ResolveAppManifestPath()
-            {
-                if (!string.IsNullOrWhiteSpace(Config.AppManifestFile))
+                // Activate Steam-style library layout when the user didn't pin a -dir,
+                // isn't doing UGC, and didn't pass an explicit -depot. In that case all
+                // depots of the app get merged into ./steamapps/common/<installdir>/ and
+                // the .acf state file lives alongside, matching Steam's on-disk convention.
+                var steamLayoutActive = string.IsNullOrWhiteSpace(Config.InstallDirectory)
+                                        && !isUgc
+                                        && !Config.HasExplicitDepots;
+                if (steamLayoutActive)
                 {
-                    return Config.AppManifestFile;
+                    Config.InstallDirectory = Path.Combine(STEAMAPPS_DIR, "common", GetAppInstallDir(appId));
                 }
-                if (string.Equals(configPath, STEAMAPPS_DIR, StringComparison.Ordinal))
+
+                // Load our configuration data containing the depots currently installed
+                var configPath = Config.InstallDirectory;
+                if (string.IsNullOrWhiteSpace(configPath))
                 {
-                    return Path.Combine(configPath, $"appmanifest_{appId}.acf");
+                    configPath = DEFAULT_DOWNLOAD_DIR;
                 }
-                return Path.Combine(configPath, CONFIG_DIR, $"appmanifest_{appId}.acf");
-            }
-
-            Directory.CreateDirectory(Path.Combine(configPath, CONFIG_DIR));
-            DepotConfigStore.LoadFromFile(Path.Combine(configPath, CONFIG_DIR, "depot.config"));
-            /*
-            if (!await AccountHasAccess(appId))
-            {
-                if (steam3.steamUser.SteamID.AccountType != EAccountType.AnonUser && await steam3.RequestFreeAppLicense(appId))
+                if (steamLayoutActive)
                 {
-                    Console.WriteLine("Obtained FreeOnDemand license for app {0}", appId);
+                    // Library-level state root: depot.config and appmanifest_<id>.acf live at
+                    // ./steamapps/, not nested inside ./steamapps/common/<installdir>/.
+                    configPath = STEAMAPPS_DIR;
+                }
 
-                    // Fetch app info again in case we didn't get it fully without a license.
-                    await steam3.RequestAppInfo(appId, true);
+                // Local helpers — declared after configPath is finalized so the path
+                // resolver can capture it. C# local functions require their captured
+                // locals to be declared earlier in textual order (CS0841).
+                bool ShouldWriteAppManifest() => steamLayoutActive || Config.GenerateAppManifest;
+
+                string ResolveAppManifestPath()
+                {
+                    if (!string.IsNullOrWhiteSpace(Config.AppManifestFile))
+                    {
+                        return Config.AppManifestFile;
+                    }
+                    if (string.Equals(configPath, STEAMAPPS_DIR, StringComparison.Ordinal))
+                    {
+                        return Path.Combine(configPath, $"appmanifest_{appId}.acf");
+                    }
+                    return Path.Combine(configPath, CONFIG_DIR, $"appmanifest_{appId}.acf");
+                }
+
+                Directory.CreateDirectory(Path.Combine(configPath, CONFIG_DIR));
+                DepotConfigStore.LoadFromFile(Path.Combine(configPath, CONFIG_DIR, "depot.config"));
+                /*
+                if (!await AccountHasAccess(appId))
+                {
+                    if (steam3.steamUser.SteamID.AccountType != EAccountType.AnonUser && await steam3.RequestFreeAppLicense(appId))
+                    {
+                        Console.WriteLine("Obtained FreeOnDemand license for app {0}", appId);
+
+                        // Fetch app info again in case we didn't get it fully without a license.
+                        await steam3.RequestAppInfo(appId, true);
+                    }
+                    else
+                    {
+                        var contentName = GetAppName(appId);
+                        throw new ContentDownloaderException(string.Format("App {0} ({1}) is not available from this account.", appId, contentName));
+                    }
+                }
+                */
+                var hasSpecificDepots = depotManifestIds.Count > 0;
+                var depotIdsFound = new List<uint>();
+                var depotIdsExpected = depotManifestIds.Select(x => x.depotId).ToList();
+                var depots = GetSteam3AppSection(appId, EAppInfoSection.Depots);
+
+                // Hoist the appmanifest.acf read up here (the full resume decision tree
+                // below still uses these locals, but `skipInteractivePrompts` needs
+                // `installed.StateFlags` *before* the depot-enumeration loop runs so
+                // the platform / main-depot / DLC prompts can affect it.
+                var acfPath = ResolveAppManifestPath();
+                var installed = AppManifestReader.TryReadFromFile(acfPath);
+                var appName = GetAppName(appId);
+                var common = GetSteam3AppSection(appId, EAppInfoSection.Common);
+
+                var skipInteractivePrompts =
+                    installed != null && installed.StateFlags != InstalledAppManifest.StateFullyInstalled;
+
+                // Tracks whether the user actually opted into platform filtering this run
+                // (either via the interactive prompt below, or via a CLI platform flag).
+                // The Lua-batch platform filter at the bottom of this method gates on this
+                // so we don't silently prune Lua depots against host defaults when the user
+                // never picked a platform (e.g. non-TTY runs without -os/-osarch/-language).
+                var platformPromptRan = false;
+
+                // Platform prompt — only when steamLayoutActive, TTY, no platform CLI flag,
+                // not in resume-from-interrupted path, no saved choice for this app yet,
+                // AND at least one axis has >= 2 distinct values.
+                if (steamLayoutActive
+                    && Ansi.CanUseInteractiveProgress
+                    && !Config.HasExplicitPlatformArgs
+                    && !skipInteractivePrompts
+                    && depots != null
+                    && !(DepotConfigStore.Instance?.AppConfigs.ContainsKey(appId) ?? false))
+                {
+                    var platformSel = AppSelectionPrompt.PromptPlatform(depots, common);
+
+                    if (platformSel.AllPlatforms)
+                    {
+                        Config.DownloadAllPlatforms = true;
+                    }
+                    else if (platformSel.Os != null)
+                    {
+                        os = platformSel.Os;
+                    }
+
+                    if (platformSel.AllArchs)
+                    {
+                        Config.DownloadAllArchs = true;
+                    }
+                    else if (platformSel.Arch != null)
+                    {
+                        arch = platformSel.Arch;
+                    }
+
+                    if (platformSel.AllLanguages)
+                    {
+                        Config.DownloadAllLanguages = true;
+                    }
+                    else if (platformSel.Language != null)
+                    {
+                        language = platformSel.Language;
+                    }
+
+                    platformPromptRan = true;
+                }
+
+                // Restore prior platform choice on resume / second run when the user
+                // didn't override via CLI and the interactive prompt didn't fire.
+                // Setting platformPromptRan = true propagates the choice to the
+                // Lua-batch post-resolution filter (which gates on it).
+                if (!Config.HasExplicitPlatformArgs
+                    && !platformPromptRan
+                    && DepotConfigStore.Instance != null
+                    && DepotConfigStore.Instance.AppConfigs.TryGetValue(appId, out var savedAppCfg))
+                {
+                    // Saved non-null value wins; saved null means "no filter on this axis"
+                    // (all-platforms / all-archs / all-languages).
+                    static void RestoreAxis(string saved, ref string target, Action setAll)
+                    {
+                        if (saved != null) target = saved;
+                        else setAll();
+                    }
+
+                    RestoreAxis(savedAppCfg.Os, ref os, () => Config.DownloadAllPlatforms = true);
+                    RestoreAxis(savedAppCfg.Arch, ref arch, () => Config.DownloadAllArchs = true);
+                    RestoreAxis(savedAppCfg.Language, ref language, () => Config.DownloadAllLanguages = true);
+
+                    platformPromptRan = true;
+                }
+
+                // Persist this run's platform decision (from prompt, CLI, or restored
+                // saved state). Idempotent — restoring then re-saving writes back the
+                // same bytes; an interactive override or new CLI flag overwrites the
+                // prior entry. Skip UGC paths: they never set os/arch/language and
+                // would write {null,null,null}, which a future non-UGC run would
+                // misread as "all platforms" and skip the prompt. Inverse of the
+                // RestoreAxis contract above: null on an axis means "no filter".
+                if (!isUgc && DepotConfigStore.Instance != null)
+                {
+                    static string PersistAxis(bool all, string current) => all ? null : current;
+
+                    DepotConfigStore.Instance.AppConfigs[appId] = new AppDownloadConfig
+                    {
+                        Os = PersistAxis(Config.DownloadAllPlatforms, os),
+                        Arch = PersistAxis(Config.DownloadAllArchs, arch),
+                        Language = PersistAxis(Config.DownloadAllLanguages, language),
+                    };
+                    DepotConfigStore.Save();
+                }
+
+                // Main-depot prompt — advanced opt-in via [y/N], only when > 1 non-shared
+                // main depot remains after the platform filter. Skip when the user named
+                // depots explicitly via -depot: the prompt would enumerate ALL PICS depots
+                // (not just user-named ones), and a follow-up prune at the end of the
+                // depot loop would silently drop CLI-named depots the user did request.
+                var deselectedMainDepots = new HashSet<uint>();
+                if (steamLayoutActive
+                    && Ansi.CanUseInteractiveProgress
+                    && !skipInteractivePrompts
+                    && !Config.HasExplicitDepots
+                    && depots != null)
+                {
+                    var mainCandidates = AppSelectionPrompt.ComputeMainDepotCandidates(
+                        depots, appId,
+                        os: os ?? Util.GetSteamOS(),
+                        allPlatforms: Config.DownloadAllPlatforms,
+                        arch: arch ?? Util.GetSteamArch(),
+                        allArchs: Config.DownloadAllArchs,
+                        language: language ?? "english",
+                        allLanguages: Config.DownloadAllLanguages);
+
+                    if (mainCandidates.Count > 1)
+                    {
+                        var selected = AppSelectionPrompt.PromptMainDepots(mainCandidates, depots);
+                        var selectedSet = new HashSet<uint>(selected);
+                        foreach (var id in mainCandidates)
+                        {
+                            if (!selectedSet.Contains(id))
+                            {
+                                deselectedMainDepots.Add(id);
+                            }
+                        }
+                    }
+                }
+
+                // DLC prompt — only in Lua batch mode when >= 1 declared DLC app id (in
+                // LuaOwnedApps minus the main appId).
+                if (steamLayoutActive
+                    && Ansi.CanUseInteractiveProgress
+                    && !skipInteractivePrompts
+                    && Config.BatchLuaDownload
+                    && Config.LuaOwnedApps != null)
+                {
+                    var extended = GetSteam3AppSection(appId, EAppInfoSection.Extended);
+                    var dlcCandidates = AppSelectionPrompt.ComputeDlcCandidates(
+                        Config.LuaOwnedApps,
+                        appId,
+                        depots,
+                        extended);
+
+                    if (dlcCandidates.Count > 0)
+                    {
+                        // Batch-prefetch PICS for each DLC app so the prompt can show
+                        // friendly names (falls back to bare app id if denied).
+                        await steam3.RequestAppInfoMany(dlcCandidates);
+
+                        var selected = AppSelectionPrompt.PromptDlcs(
+                            dlcCandidates,
+                            id => GetAppName(id));
+                        var selectedSet = new HashSet<uint>(selected);
+
+                        foreach (var dlcId in dlcCandidates)
+                        {
+                            if (!selectedSet.Contains(dlcId))
+                            {
+                                // Drop from all four locations: Lua manifest map, token map,
+                                // owned-apps set, and the working depot list. The DLC's
+                                // depot id usually equals its app id, but Steam PICS can also
+                                // identify the owning DLC through depots.<id>.dlcappid.
+                                Config.LuaManifestIds?.Remove(dlcId);
+                                Config.LuaAppTokens?.Remove(dlcId);
+                                Config.LuaOwnedApps.Remove(dlcId);
+                                depotManifestIds.RemoveAll(entry =>
+                                    AppSelectionPrompt.DepotBelongsToDlc(entry.depotId, dlcId, depots));
+                            }
+                        }
+                    }
+                }
+
+                if (isUgc)
+                {
+                    var workshopDepot = depots["workshopdepot"].AsUnsignedInteger();
+                    if (workshopDepot != 0 && !depotIdsExpected.Contains(workshopDepot))
+                    {
+                        depotIdsExpected.Add(workshopDepot);
+                        depotManifestIds = depotManifestIds.Select(pair => (workshopDepot, pair.manifestId)).ToList();
+                    }
+
+                    depotIdsFound.AddRange(depotIdsExpected);
                 }
                 else
                 {
-                    var contentName = GetAppName(appId);
-                    throw new ContentDownloaderException(string.Format("App {0} ({1}) is not available from this account.", appId, contentName));
-                }
-            }
-            */
-            var hasSpecificDepots = depotManifestIds.Count > 0;
-            var depotIdsFound = new List<uint>();
-            var depotIdsExpected = depotManifestIds.Select(x => x.depotId).ToList();
-            var depots = GetSteam3AppSection(appId, EAppInfoSection.Depots);
+                    Console.WriteLine("Using app branch: '{0}'.", branch);
 
-            // Hoist the appmanifest.acf read up here (the full resume decision tree
-            // below still uses these locals, but `skipInteractivePrompts` needs
-            // `installed.StateFlags` *before* the depot-enumeration loop runs so
-            // the platform / main-depot / DLC prompts can affect it.
-            var acfPath = ResolveAppManifestPath();
-            var installed = AppManifestReader.TryReadFromFile(acfPath);
-            var appName = GetAppName(appId);
-            var common = GetSteam3AppSection(appId, EAppInfoSection.Common);
-
-            var skipInteractivePrompts =
-                installed != null && installed.StateFlags != InstalledAppManifest.StateFullyInstalled;
-
-            // Tracks whether the user actually opted into platform filtering this run
-            // (either via the interactive prompt below, or via a CLI platform flag).
-            // The Lua-batch platform filter at the bottom of this method gates on this
-            // so we don't silently prune Lua depots against host defaults when the user
-            // never picked a platform (e.g. non-TTY runs without -os/-osarch/-language).
-            var platformPromptRan = false;
-
-            // Platform prompt — only when steamLayoutActive, TTY, no platform CLI flag,
-            // not in resume-from-interrupted path, no saved choice for this app yet,
-            // AND at least one axis has >= 2 distinct values.
-            if (steamLayoutActive
-                && Ansi.CanUseInteractiveProgress
-                && !Config.HasExplicitPlatformArgs
-                && !skipInteractivePrompts
-                && depots != null
-                && !(DepotConfigStore.Instance?.AppConfigs.ContainsKey(appId) ?? false))
-            {
-                var platformSel = AppSelectionPrompt.PromptPlatform(depots, common);
-
-                if (platformSel.AllPlatforms)
-                {
-                    Config.DownloadAllPlatforms = true;
-                }
-                else if (platformSel.Os != null)
-                {
-                    os = platformSel.Os;
-                }
-
-                if (platformSel.AllArchs)
-                {
-                    Config.DownloadAllArchs = true;
-                }
-                else if (platformSel.Arch != null)
-                {
-                    arch = platformSel.Arch;
-                }
-
-                if (platformSel.AllLanguages)
-                {
-                    Config.DownloadAllLanguages = true;
-                }
-                else if (platformSel.Language != null)
-                {
-                    language = platformSel.Language;
-                }
-
-                platformPromptRan = true;
-            }
-
-            // Restore prior platform choice on resume / second run when the user
-            // didn't override via CLI and the interactive prompt didn't fire.
-            // Setting platformPromptRan = true propagates the choice to the
-            // Lua-batch post-resolution filter (which gates on it).
-            if (!Config.HasExplicitPlatformArgs
-                && !platformPromptRan
-                && DepotConfigStore.Instance != null
-                && DepotConfigStore.Instance.AppConfigs.TryGetValue(appId, out var savedAppCfg))
-            {
-                // Saved non-null value wins; saved null means "no filter on this axis"
-                // (all-platforms / all-archs / all-languages).
-                static void RestoreAxis(string saved, ref string target, Action setAll)
-                {
-                    if (saved != null) target = saved;
-                    else setAll();
-                }
-
-                RestoreAxis(savedAppCfg.Os, ref os, () => Config.DownloadAllPlatforms = true);
-                RestoreAxis(savedAppCfg.Arch, ref arch, () => Config.DownloadAllArchs = true);
-                RestoreAxis(savedAppCfg.Language, ref language, () => Config.DownloadAllLanguages = true);
-
-                platformPromptRan = true;
-            }
-
-            // Persist this run's platform decision (from prompt, CLI, or restored
-            // saved state). Idempotent — restoring then re-saving writes back the
-            // same bytes; an interactive override or new CLI flag overwrites the
-            // prior entry. Skip UGC paths: they never set os/arch/language and
-            // would write {null,null,null}, which a future non-UGC run would
-            // misread as "all platforms" and skip the prompt. Inverse of the
-            // RestoreAxis contract above: null on an axis means "no filter".
-            if (!isUgc && DepotConfigStore.Instance != null)
-            {
-                static string PersistAxis(bool all, string current) => all ? null : current;
-
-                DepotConfigStore.Instance.AppConfigs[appId] = new AppDownloadConfig
-                {
-                    Os = PersistAxis(Config.DownloadAllPlatforms, os),
-                    Arch = PersistAxis(Config.DownloadAllArchs, arch),
-                    Language = PersistAxis(Config.DownloadAllLanguages, language),
-                };
-                DepotConfigStore.Save();
-            }
-
-            // Main-depot prompt — advanced opt-in via [y/N], only when > 1 non-shared
-            // main depot remains after the platform filter. Skip when the user named
-            // depots explicitly via -depot: the prompt would enumerate ALL PICS depots
-            // (not just user-named ones), and a follow-up prune at the end of the
-            // depot loop would silently drop CLI-named depots the user did request.
-            var deselectedMainDepots = new HashSet<uint>();
-            if (steamLayoutActive
-                && Ansi.CanUseInteractiveProgress
-                && !skipInteractivePrompts
-                && !Config.HasExplicitDepots
-                && depots != null)
-            {
-                var mainCandidates = AppSelectionPrompt.ComputeMainDepotCandidates(
-                    depots, appId,
-                    os: os ?? Util.GetSteamOS(),
-                    allPlatforms: Config.DownloadAllPlatforms,
-                    arch: arch ?? Util.GetSteamArch(),
-                    allArchs: Config.DownloadAllArchs,
-                    language: language ?? "english",
-                    allLanguages: Config.DownloadAllLanguages);
-
-                if (mainCandidates.Count > 1)
-                {
-                    var selected = AppSelectionPrompt.PromptMainDepots(mainCandidates, depots);
-                    var selectedSet = new HashSet<uint>(selected);
-                    foreach (var id in mainCandidates)
-                    {
-                        if (!selectedSet.Contains(id))
-                        {
-                            deselectedMainDepots.Add(id);
-                        }
-                    }
-                }
-            }
-
-            // DLC prompt — only in Lua batch mode when >= 1 declared DLC app id (in
-            // LuaOwnedApps minus the main appId).
-            if (steamLayoutActive
-                && Ansi.CanUseInteractiveProgress
-                && !skipInteractivePrompts
-                && Config.BatchLuaDownload
-                && Config.LuaOwnedApps != null)
-            {
-                var extended = GetSteam3AppSection(appId, EAppInfoSection.Extended);
-                var dlcCandidates = AppSelectionPrompt.ComputeDlcCandidates(
-                    Config.LuaOwnedApps,
-                    appId,
-                    depots,
-                    extended);
-
-                if (dlcCandidates.Count > 0)
-                {
-                    // Batch-prefetch PICS for each DLC app so the prompt can show
-                    // friendly names (falls back to bare app id if denied).
-                    await steam3.RequestAppInfoMany(dlcCandidates);
-
-                    var selected = AppSelectionPrompt.PromptDlcs(
-                        dlcCandidates,
-                        id => GetAppName(id));
-                    var selectedSet = new HashSet<uint>(selected);
-
-                    foreach (var dlcId in dlcCandidates)
-                    {
-                        if (!selectedSet.Contains(dlcId))
-                        {
-                            // Drop from all four locations: Lua manifest map, token map,
-                            // owned-apps set, and the working depot list. The DLC's
-                            // depot id usually equals its app id, but Steam PICS can also
-                            // identify the owning DLC through depots.<id>.dlcappid.
-                            Config.LuaManifestIds?.Remove(dlcId);
-                            Config.LuaAppTokens?.Remove(dlcId);
-                            Config.LuaOwnedApps.Remove(dlcId);
-                            depotManifestIds.RemoveAll(entry =>
-                                AppSelectionPrompt.DepotBelongsToDlc(entry.depotId, dlcId, depots));
-                        }
-                    }
-                }
-            }
-
-            if (isUgc)
-            {
-                var workshopDepot = depots["workshopdepot"].AsUnsignedInteger();
-                if (workshopDepot != 0 && !depotIdsExpected.Contains(workshopDepot))
-                {
-                    depotIdsExpected.Add(workshopDepot);
-                    depotManifestIds = depotManifestIds.Select(pair => (workshopDepot, pair.manifestId)).ToList();
-                }
-
-                depotIdsFound.AddRange(depotIdsExpected);
-            }
-            else
-            {
-                Console.WriteLine("Using app branch: '{0}'.", branch);
-
-                if (depots != null)
-                {
-                    foreach (var depotSection in depots.Children)
-                    {
-                        var id = INVALID_DEPOT_ID;
-                        if (depotSection.Children.Count == 0)
-                            continue;
-
-                        if (!uint.TryParse(depotSection.Name, out id))
-                            continue;
-
-                        if (hasSpecificDepots && !depotIdsExpected.Contains(id))
-                            continue;
-
-                        // Apply main-depot deselection (set by the Step 3 prompt).
-                        if (deselectedMainDepots.Contains(id))
-                        {
-                            continue;
-                        }
-
-                        if (!hasSpecificDepots)
-                        {
-                            var depotConfig = depotSection["config"];
-                            if (!AppSelectionPrompt.DepotMatchesPlatform(
-                                    depotConfig,
-                                    os ?? Util.GetSteamOS(), Config.DownloadAllPlatforms,
-                                    arch ?? Util.GetSteamArch(), Config.DownloadAllArchs,
-                                    language ?? "english", Config.DownloadAllLanguages))
-                            {
-                                continue;
-                            }
-
-                            if (depotConfig != KeyValue.Invalid &&
-                                !lv &&
-                                depotConfig["lowviolence"] != KeyValue.Invalid &&
-                                depotConfig["lowviolence"].AsBoolean())
-                            {
-                                continue;
-                            }
-                        }
-
-                        depotIdsFound.Add(id);
-
-                        if (!hasSpecificDepots)
-                            depotManifestIds.Add((id, INVALID_MANIFEST_ID));
-                    }
-                }
-
-                // Drop deselected main depots from the working list — in non-Lua
-                // mode they were never added by the loop above (which skips them
-                // via the new `deselectedMainDepots.Contains(id)` continue); in
-                // Lua batch mode they're in `depotManifestIds` from Program.cs.
-                if (deselectedMainDepots.Count > 0)
-                {
-                    depotManifestIds.RemoveAll(entry => deselectedMainDepots.Contains(entry.depotId));
-                }
-
-                if (depotManifestIds.Count == 0 && !hasSpecificDepots)
-                {
-                    throw new ContentDownloaderException(string.Format("Couldn't find any depots to download for app {0}", appId));
-                }
-
-                if (depotIdsFound.Count < depotIdsExpected.Count)
-                {
-                    var remainingDepotIds = depotIdsExpected.Except(depotIdsFound);
-                    //throw new ContentDownloaderException(string.Format("Depot {0} not listed for app {1}", string.Join(", ", remainingDepotIds), appId));
-                    // Mod for force download
-                }
-            }
-
-            // When batch-downloading via Lua, skip depots that Steam PICS marks as
-            // shared installs (typical VC++ / DirectX redists from app 228980) so
-            // they do not appear as selectable DLC content.
-            if (Config.BatchLuaDownload && !isUgc && depots != null)
-            {
-                depotManifestIds = depotManifestIds.Where(entry =>
-                {
-                    var depotChild = depots[entry.depotId.ToString()];
-                    if (depotChild == KeyValue.Invalid) return true;
-                    if (AppSelectionPrompt.IsSharedDepot(depotChild, appId))
-                    {
-                        var fromApp = depotChild["depotfromapp"].AsUnsignedInteger();
-                        if (fromApp != 0)
-                        {
-                            Console.WriteLine("Skipping shared depot {0} (provided by app {1})", entry.depotId, fromApp);
-                        }
-                        else
-                        {
-                            Console.WriteLine("Skipping shared depot {0} (sharedinstall)", entry.depotId);
-                        }
-                        return false;
-                    }
-                    return true;
-                }).ToList();
-            }
-
-            // Extend platform filter to Lua-batch depots. Developer mode (explicit
-            // -depot but no Lua batch) is intentionally left alone — user named the
-            // depots, don't second-guess. Also skip when the user never opted into
-            // platform filtering (no CLI flag, no interactive prompt) — otherwise we
-            // would prune Lua depots against host defaults the user never confirmed.
-            if (steamLayoutActive
-                && Config.BatchLuaDownload
-                && (Config.HasExplicitPlatformArgs || platformPromptRan)
-                && (!Config.DownloadAllPlatforms || !Config.DownloadAllArchs || !Config.DownloadAllLanguages))
-            {
-                // Identify Lua depots whose parent app PICS we don't yet have. For
-                // depots in main app's PICS section, parent is main app (PICS loaded).
-                // For depots not in main app's PICS, assume parent app id == depot id
-                // (the single-depot DLC convention).
-                var unknownParents = depotManifestIds
-                    .Select(entry => entry.depotId)
-                    .Where(id =>
-                    {
-                        if (depots == null) return true;  // shouldn't happen — defensive
-                        return depots[id.ToString()] == KeyValue.Invalid && !steam3.AppInfo.ContainsKey(id);
-                    })
-                    .Distinct()
-                    .ToList();
-
-                if (unknownParents.Count > 0)
-                {
-                    await steam3.RequestAppInfoMany(unknownParents);
-                }
-
-                var resolvedOs = os ?? Util.GetSteamOS();
-                var resolvedArch = arch ?? Util.GetSteamArch();
-                var resolvedLanguage = language ?? "english";
-
-                depotManifestIds = depotManifestIds.Where(entry =>
-                {
-                    var depotId = entry.depotId;
-
-                    // Find this depot's PICS section: either main app's depots[id] or
-                    // a separate app's depots[id] (DLC convention: depot id == app id).
-                    KeyValue depotSection = KeyValue.Invalid;
                     if (depots != null)
                     {
-                        depotSection = depots[depotId.ToString()];
-                    }
-                    if (depotSection == KeyValue.Invalid && steam3.AppInfo.TryGetValue(depotId, out var parentInfo) && parentInfo != null)
-                    {
-                        var parentDepots = parentInfo.KeyValues["depots"];
-                        if (parentDepots != KeyValue.Invalid)
+                        foreach (var depotSection in depots.Children)
                         {
-                            depotSection = parentDepots[depotId.ToString()];
+                            var id = INVALID_DEPOT_ID;
+                            if (depotSection.Children.Count == 0)
+                                continue;
+
+                            if (!uint.TryParse(depotSection.Name, out id))
+                                continue;
+
+                            if (hasSpecificDepots && !depotIdsExpected.Contains(id))
+                                continue;
+
+                            // Apply main-depot deselection (set by the Step 3 prompt).
+                            if (deselectedMainDepots.Contains(id))
+                            {
+                                continue;
+                            }
+
+                            if (!hasSpecificDepots)
+                            {
+                                var depotConfig = depotSection["config"];
+                                if (!AppSelectionPrompt.DepotMatchesPlatform(
+                                        depotConfig,
+                                        os ?? Util.GetSteamOS(), Config.DownloadAllPlatforms,
+                                        arch ?? Util.GetSteamArch(), Config.DownloadAllArchs,
+                                        language ?? "english", Config.DownloadAllLanguages))
+                                {
+                                    continue;
+                                }
+
+                                if (depotConfig != KeyValue.Invalid &&
+                                    !lv &&
+                                    depotConfig["lowviolence"] != KeyValue.Invalid &&
+                                    depotConfig["lowviolence"].AsBoolean())
+                                {
+                                    continue;
+                                }
+                            }
+
+                            depotIdsFound.Add(id);
+
+                            if (!hasSpecificDepots)
+                                depotManifestIds.Add((id, INVALID_MANIFEST_ID));
                         }
                     }
 
-                    if (depotSection == KeyValue.Invalid)
+                    // Drop deselected main depots from the working list — in non-Lua
+                    // mode they were never added by the loop above (which skips them
+                    // via the new `deselectedMainDepots.Contains(id)` continue); in
+                    // Lua batch mode they're in `depotManifestIds` from Program.cs.
+                    if (deselectedMainDepots.Count > 0)
                     {
-                        return true;  // No PICS info -> fail-open, keep.
+                        depotManifestIds.RemoveAll(entry => deselectedMainDepots.Contains(entry.depotId));
                     }
 
-                    return AppSelectionPrompt.DepotMatchesPlatform(
-                        depotSection["config"],
-                        resolvedOs, Config.DownloadAllPlatforms,
-                        resolvedArch, Config.DownloadAllArchs,
-                        resolvedLanguage, Config.DownloadAllLanguages);
-                }).ToList();
-            }
-
-            var infos = new List<DepotDownloadInfo>();
-
-            foreach (var (depotId, manifestId) in depotManifestIds)
-            {
-                var info = await GetDepotInfo(depotId, appId, manifestId, branch);
-                if (info != null)
-                {
-                    infos.Add(info);
-                }
-            }
-
-            Console.WriteLine();
-
-            // `acfPath`, `installed`, and `appName` are declared earlier (hoisted
-            // before the prompt blocks so `skipInteractivePrompts` could gate them).
-            if (installed == null)
-            {
-                Console.WriteLine("Installing app {0} ({1})...", appId, appName);
-            }
-            else if (installed.StateFlags == InstalledAppManifest.StateFullyInstalled)
-            {
-                var mismatched = 0;
-                foreach (var (depotId, manifestId) in infos.Select(d => (d.DepotId, d.ManifestId)))
-                {
-                    installed.InstalledDepots.TryGetValue(depotId, out var recorded);
-                    if (recorded != manifestId)
+                    if (depotManifestIds.Count == 0 && !hasSpecificDepots)
                     {
-                        mismatched++;
+                        throw new ContentDownloaderException(string.Format("Couldn't find any depots to download for app {0}", appId));
+                    }
+
+                    if (depotIdsFound.Count < depotIdsExpected.Count)
+                    {
+                        var remainingDepotIds = depotIdsExpected.Except(depotIdsFound);
+                        //throw new ContentDownloaderException(string.Format("Depot {0} not listed for app {1}", string.Join(", ", remainingDepotIds), appId));
+                        // Mod for force download
                     }
                 }
-                if (mismatched == 0 && infos.Count > 0 && !Config.VerifyAll)
+
+                // When batch-downloading via Lua, skip depots that Steam PICS marks as
+                // shared installs (typical VC++ / DirectX redists from app 228980) so
+                // they do not appear as selectable DLC content.
+                if (Config.BatchLuaDownload && !isUgc && depots != null)
                 {
-                    Console.WriteLine("App {0} ({1}) is fully installed (build {2}). Nothing to do.", appId, appName, installed.BuildId);
-                    return;
-                }
-                if (mismatched > 0)
-                {
-                    Console.WriteLine("Update available for app {0} ({1}): {2} depot(s) have new manifests. Proceeding...", appId, appName, mismatched);
-                }
-                else if (Config.VerifyAll)
-                {
-                    Console.WriteLine("App {0} ({1}) is fully installed; re-verifying because -verify-all was passed.", appId, appName);
-                }
-            }
-            else // StateFlags != StateFullyInstalled (resume-from-interrupted path)
-            {
-                var completed = 0;
-                foreach (var (depotId, manifestId) in infos.Select(d => (d.DepotId, d.ManifestId)))
-                {
-                    installed.InstalledDepots.TryGetValue(depotId, out var recorded);
-                    if (recorded == manifestId && recorded != 0)
+                    depotManifestIds = depotManifestIds.Where(entry =>
                     {
-                        completed++;
+                        var depotChild = depots[entry.depotId.ToString()];
+                        if (depotChild == KeyValue.Invalid) return true;
+                        if (AppSelectionPrompt.IsSharedDepot(depotChild, appId))
+                        {
+                            var fromApp = depotChild["depotfromapp"].AsUnsignedInteger();
+                            if (fromApp != 0)
+                            {
+                                Console.WriteLine("Skipping shared depot {0} (provided by app {1})", entry.depotId, fromApp);
+                            }
+                            else
+                            {
+                                Console.WriteLine("Skipping shared depot {0} (sharedinstall)", entry.depotId);
+                            }
+                            return false;
+                        }
+                        return true;
+                    }).ToList();
+                }
+
+                // Extend platform filter to Lua-batch depots. Developer mode (explicit
+                // -depot but no Lua batch) is intentionally left alone — user named the
+                // depots, don't second-guess. Also skip when the user never opted into
+                // platform filtering (no CLI flag, no interactive prompt) — otherwise we
+                // would prune Lua depots against host defaults the user never confirmed.
+                if (steamLayoutActive
+                    && Config.BatchLuaDownload
+                    && (Config.HasExplicitPlatformArgs || platformPromptRan)
+                    && (!Config.DownloadAllPlatforms || !Config.DownloadAllArchs || !Config.DownloadAllLanguages))
+                {
+                    // Identify Lua depots whose parent app PICS we don't yet have. For
+                    // depots in main app's PICS section, parent is main app (PICS loaded).
+                    // For depots not in main app's PICS, assume parent app id == depot id
+                    // (the single-depot DLC convention).
+                    var unknownParents = depotManifestIds
+                        .Select(entry => entry.depotId)
+                        .Where(id =>
+                        {
+                            if (depots == null) return true;  // shouldn't happen — defensive
+                            return depots[id.ToString()] == KeyValue.Invalid && !steam3.AppInfo.ContainsKey(id);
+                        })
+                        .Distinct()
+                        .ToList();
+
+                    if (unknownParents.Count > 0)
+                    {
+                        await steam3.RequestAppInfoMany(unknownParents);
+                    }
+
+                    var resolvedOs = os ?? Util.GetSteamOS();
+                    var resolvedArch = arch ?? Util.GetSteamArch();
+                    var resolvedLanguage = language ?? "english";
+
+                    depotManifestIds = depotManifestIds.Where(entry =>
+                    {
+                        var depotId = entry.depotId;
+
+                        // Find this depot's PICS section: either main app's depots[id] or
+                        // a separate app's depots[id] (DLC convention: depot id == app id).
+                        KeyValue depotSection = KeyValue.Invalid;
+                        if (depots != null)
+                        {
+                            depotSection = depots[depotId.ToString()];
+                        }
+                        if (depotSection == KeyValue.Invalid && steam3.AppInfo.TryGetValue(depotId, out var parentInfo) && parentInfo != null)
+                        {
+                            var parentDepots = parentInfo.KeyValues["depots"];
+                            if (parentDepots != KeyValue.Invalid)
+                            {
+                                depotSection = parentDepots[depotId.ToString()];
+                            }
+                        }
+
+                        if (depotSection == KeyValue.Invalid)
+                        {
+                            return true;  // No PICS info -> fail-open, keep.
+                        }
+
+                        return AppSelectionPrompt.DepotMatchesPlatform(
+                            depotSection["config"],
+                            resolvedOs, Config.DownloadAllPlatforms,
+                            resolvedArch, Config.DownloadAllArchs,
+                            resolvedLanguage, Config.DownloadAllLanguages);
+                    }).ToList();
+                }
+
+                var infos = new List<DepotDownloadInfo>();
+
+                foreach (var (depotId, manifestId) in depotManifestIds)
+                {
+                    var info = await GetDepotInfo(depotId, appId, manifestId, branch);
+                    if (info != null)
+                    {
+                        infos.Add(info);
                     }
                 }
-                Console.WriteLine("Previous download was interrupted (StateFlags={0}). {1}/{2} depots already installed, resuming...", installed.StateFlags, completed, infos.Count);
-            }
 
-            // Detect any depot-mode installs of the requested depots and offer to migrate
-            // their files into the Steam-layout location. Only fires in steam-layout mode
-            // (Config.InstallDirectory is the steamapps/common/<installdir>/ path by this
-            // point, set by the steamLayoutActive override earlier in this method).
-            if (steamLayoutActive)
-            {
-                DepotMigration.MaybeMigrate(
-                    infos.Select(d => (d.DepotId, d.ManifestId)),
-                    Config.InstallDirectory,
-                    autoMigrate: Config.MigrateDepotInstalls,
-                    interactive: Ansi.CanUseInteractiveProgress);
-            }
+                Console.WriteLine();
 
-            if (ShouldWriteAppManifest())
-            {
-                WriteAppManifest(appId, branch, language, infos, configPath, stateFlags: 1026);
-            }
+                // `acfPath`, `installed`, and `appName` are declared earlier (hoisted
+                // before the prompt blocks so `skipInteractivePrompts` could gate them).
+                if (installed == null)
+                {
+                    Console.WriteLine("Installing app {0} ({1})...", appId, appName);
+                }
+                else if (installed.StateFlags == InstalledAppManifest.StateFullyInstalled)
+                {
+                    var mismatched = 0;
+                    foreach (var (depotId, manifestId) in infos.Select(d => (d.DepotId, d.ManifestId)))
+                    {
+                        installed.InstalledDepots.TryGetValue(depotId, out var recorded);
+                        if (recorded != manifestId)
+                        {
+                            mismatched++;
+                        }
+                    }
+                    if (mismatched == 0 && infos.Count > 0 && !Config.VerifyAll)
+                    {
+                        Console.WriteLine("App {0} ({1}) is fully installed (build {2}). Nothing to do.", appId, appName, installed.BuildId);
+                        return;
+                    }
+                    if (mismatched > 0)
+                    {
+                        Console.WriteLine("Update available for app {0} ({1}): {2} depot(s) have new manifests. Proceeding...", appId, appName, mismatched);
+                    }
+                    else if (Config.VerifyAll)
+                    {
+                        Console.WriteLine("App {0} ({1}) is fully installed; re-verifying because -verify-all was passed.", appId, appName);
+                    }
+                }
+                else // StateFlags != StateFullyInstalled (resume-from-interrupted path)
+                {
+                    var completed = 0;
+                    foreach (var (depotId, manifestId) in infos.Select(d => (d.DepotId, d.ManifestId)))
+                    {
+                        installed.InstalledDepots.TryGetValue(depotId, out var recorded);
+                        if (recorded == manifestId && recorded != 0)
+                        {
+                            completed++;
+                        }
+                    }
+                    Console.WriteLine("Previous download was interrupted (StateFlags={0}). {1}/{2} depots already installed, resuming...", installed.StateFlags, completed, infos.Count);
+                }
 
-            try
-            {
-                await DownloadSteam3Async(infos).ConfigureAwait(false);
+                // Detect any depot-mode installs of the requested depots and offer to migrate
+                // their files into the Steam-layout location. Only fires in steam-layout mode
+                // (Config.InstallDirectory is the steamapps/common/<installdir>/ path by this
+                // point, set by the steamLayoutActive override earlier in this method).
+                if (steamLayoutActive)
+                {
+                    DepotMigration.MaybeMigrate(
+                        infos.Select(d => (d.DepotId, d.ManifestId)),
+                        Config.InstallDirectory,
+                        autoMigrate: Config.MigrateDepotInstalls,
+                        interactive: Ansi.CanUseInteractiveProgress);
+                }
 
                 if (ShouldWriteAppManifest())
                 {
-                    WriteAppManifest(appId, branch, language, infos, configPath, stateFlags: 4);
+                    WriteAppManifest(appId, branch, language, infos, configPath, stateFlags: 1026);
                 }
+
+                try
+                {
+                    await DownloadSteam3Async(infos).ConfigureAwait(false);
+
+                    if (ShouldWriteAppManifest())
+                    {
+                        WriteAppManifest(appId, branch, language, infos, configPath, stateFlags: 4);
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    Console.WriteLine("App {0} was not completely downloaded.", appId);
+                    throw;
+                }
+
+                appSuccess = depotsFailed.Count == 0 && depotsOk.Count > 0;
             }
-            catch (OperationCanceledException)
+            finally
             {
-                Console.WriteLine("App {0} was not completely downloaded.", appId);
-                throw;
+                JsonProgressLogger.EmitAppDone(appSuccess, depotsOk, depotsFailed);
             }
         }
 
