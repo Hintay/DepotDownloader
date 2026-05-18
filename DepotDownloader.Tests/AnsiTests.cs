@@ -117,5 +117,48 @@ namespace DepotDownloader.Tests
             // progressDepth must be 0.
             Assert.Equal(0, Ansi.progressDepth);
         }
+
+        [Fact]
+        public void GlobalCounter_AccumulatesAcrossDepots()
+        {
+            var counter = new GlobalDownloadCounter();
+            counter.Begin(totalSize: 1000, useInteractiveProgress: false);
+
+            // First depot: 0 done + 6 total
+            counter.SetCurrentDepot(941951);
+            counter.RegisterDepotChunks(completedChunks: 0, totalChunks: 6);
+
+            // Two chunks done
+            counter.AddCompletedChunk(bytes: 10, diskBytes: 10, diskElapsed: System.TimeSpan.Zero);
+            counter.AddCompletedChunk(bytes: 10, diskBytes: 10, diskElapsed: System.TimeSpan.Zero);
+
+            // Second depot starts: 3 already validated + 10 total
+            counter.SetCurrentDepot(941952);
+            counter.RegisterDepotChunks(completedChunks: 3, totalChunks: 10);
+
+            // One more chunk
+            counter.AddCompletedChunk(bytes: 10, diskBytes: 10, diskElapsed: System.TimeSpan.Zero);
+
+            var desc = counter.BuildProgressDescription();
+            // 2 (depot 1 chunks) + 3 (depot 2 validated) + 1 (depot 2 new) = 6
+            // 6 (depot 1 total) + 10 (depot 2 total) = 16
+            Assert.Contains("C 6/16", desc);
+            Assert.Contains("Depot 941952", desc);
+        }
+
+        [Fact]
+        public void GlobalCounter_SetCurrentDepotPreservesCounters()
+        {
+            var counter = new GlobalDownloadCounter();
+            counter.Begin(totalSize: 1000, useInteractiveProgress: false);
+
+            counter.RegisterDepotChunks(completedChunks: 5, totalChunks: 10);
+            counter.SetCurrentDepot(123);
+            counter.SetCurrentDepot(456);  // switching depot should NOT reset counters
+
+            var desc = counter.BuildProgressDescription();
+            Assert.Contains("C 5/10", desc);
+            Assert.Contains("Depot 456", desc);
+        }
     }
 }

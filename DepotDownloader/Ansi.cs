@@ -242,8 +242,8 @@ class GlobalDownloadCounter
 
     DateTime downloadStartTime;
     uint currentDepotId;
-    int currentDepotCompletedChunks;
-    int currentDepotTotalChunks;
+    int globalCompletedChunks;
+    int globalTotalChunks;
     ulong diskBytesWritten;
     long diskWriteTicks;
     bool useInteractiveOutput;
@@ -382,23 +382,24 @@ class GlobalDownloadCounter
         return $"Verifying  | C {verifyDoneChunks}/{verifyTotalChunks} | Disk {Ansi.FormatBytes(bytesPerSecond)}/s";
     }
 
-    public void SetCurrentDepot(uint depotId, int completedChunks = 0, int totalChunks = 0)
+    public void SetCurrentDepot(uint depotId)
     {
         lock (this)
         {
             currentDepotId = depotId;
-            currentDepotCompletedChunks = completedChunks;
-            currentDepotTotalChunks = totalChunks;
             UpdateProgressDisplay();
         }
     }
 
-    public void SetCurrentDepotChunks(int completedChunks, int totalChunks)
+    // Called once per depot after its chunk list is settled. The values are
+    // ADDED to the global totals so the C counter in the bar description
+    // reflects all depots combined rather than just the current one.
+    public void RegisterDepotChunks(int completedChunks, int totalChunks)
     {
         lock (this)
         {
-            currentDepotCompletedChunks = completedChunks;
-            currentDepotTotalChunks = totalChunks;
+            globalCompletedChunks += completedChunks;
+            globalTotalChunks += totalChunks;
             UpdateProgressDisplay();
         }
     }
@@ -440,13 +441,12 @@ class GlobalDownloadCounter
         }
     }
 
-    public void AddCompletedChunk(ulong bytes, int completedChunks, int totalChunks, ulong diskBytes, TimeSpan diskElapsed)
+    public void AddCompletedChunk(ulong bytes, ulong diskBytes, TimeSpan diskElapsed)
     {
         lock (this)
         {
             networkStartTime ??= DateTime.UtcNow;
-            currentDepotCompletedChunks = completedChunks;
-            currentDepotTotalChunks = totalChunks;
+            globalCompletedChunks++;
             diskBytesWritten += diskBytes;
             diskWriteTicks += diskElapsed.Ticks;
 
@@ -507,7 +507,7 @@ class GlobalDownloadCounter
         progressTask.Description = BuildProgressDescription();
     }
 
-    string BuildProgressDescription()
+    internal string BuildProgressDescription()
     {
         if (totalDownloadSize == 0)
         {
@@ -527,6 +527,6 @@ class GlobalDownloadCounter
         var diskElapsed = TimeSpan.FromTicks(diskWriteTicks);
         var diskBytesPerSecond = diskElapsed.TotalSeconds > 0 ? diskBytesWritten / diskElapsed.TotalSeconds : 0;
 
-        return $"Depot {currentDepotId} | C {currentDepotCompletedChunks}/{currentDepotTotalChunks} | Net {Ansi.FormatBytes(bytesPerSecond)}/s | Disk {Ansi.FormatBytes(diskBytesPerSecond)}/s";
+        return $"Depot {currentDepotId} | C {globalCompletedChunks}/{globalTotalChunks} | Net {Ansi.FormatBytes(bytesPerSecond)}/s | Disk {Ansi.FormatBytes(diskBytesPerSecond)}/s";
     }
 }

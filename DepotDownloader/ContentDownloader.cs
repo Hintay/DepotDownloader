@@ -1538,7 +1538,7 @@ namespace DepotDownloader
                 DownloadSteam3AsyncDepotFile(cts, downloadCounter, depotFilesData, file, networkChunkQueue);
             });
 
-            downloadCounter.SetCurrentDepotChunks(depotCounter.completedChunks, depotCounter.totalChunks);
+            downloadCounter.RegisterDepotChunks(depotCounter.completedChunks, depotCounter.totalChunks);
 
             await Parallel.ForEachAsync(networkChunkQueue, parallelOptions, async (q, cancellationToken) =>
             {
@@ -1956,17 +1956,14 @@ namespace DepotDownloader
                 fileStreamData.fileLock.Dispose();
             }
 
-            ulong sizeDownloaded = 0;
-            int completedChunks;
-            int totalChunks;
+            ulong sizeDownloaded;
             lock (depotDownloadCounter)
             {
                 sizeDownloaded = depotDownloadCounter.sizeDownloaded + (ulong)written;
                 depotDownloadCounter.sizeDownloaded = sizeDownloaded;
                 depotDownloadCounter.depotBytesCompressed += chunk.CompressedLength;
                 depotDownloadCounter.depotBytesUncompressed += chunk.UncompressedLength;
-                completedChunks = ++depotDownloadCounter.completedChunks;
-                totalChunks = depotDownloadCounter.totalChunks;
+                depotDownloadCounter.completedChunks++;
             }
 
             lock (downloadCounter)
@@ -1975,7 +1972,7 @@ namespace DepotDownloader
                 downloadCounter.totalBytesUncompressed += chunk.UncompressedLength;
             }
 
-            downloadCounter.AddCompletedChunk(chunk.UncompressedLength, completedChunks, totalChunks, (ulong)written, diskStopwatch.Elapsed);
+            downloadCounter.AddCompletedChunk(chunk.UncompressedLength, (ulong)written, diskStopwatch.Elapsed);
 
             if (remainingChunks == 0)
             {
