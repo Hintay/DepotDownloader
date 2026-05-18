@@ -274,7 +274,7 @@ namespace DepotDownloader
 
                 if (!steam3.AppBetaPasswords.ContainsKey(branch))
                 {
-                    Console.WriteLine($"Error: Password was invalid for branch {branch} (or the branch does not exist)");
+                    (Config.JsonProgress ? Console.Error : Console.Out).WriteLine($"Error: Password was invalid for branch {branch} (or the branch does not exist)");
                     return INVALID_MANIFEST_ID;
                 }
             }
@@ -483,7 +483,7 @@ namespace DepotDownloader
         {
             if (!CreateDirectories(appId, 0, out var installDir))
             {
-                Console.WriteLine("Error: Unable to create install directories!");
+                (Config.JsonProgress ? Console.Error : Console.Out).WriteLine("Error: Unable to create install directories!");
                 return;
             }
 
@@ -1103,7 +1103,7 @@ namespace DepotDownloader
 
             if (!CreateDirectories(depotId, uVersion, out var installDir))
             {
-                Console.WriteLine("Error: Unable to create install directories!");
+                (Config.JsonProgress ? Console.Error : Console.Out).WriteLine("Error: Unable to create install directories!");
                 return null;
             }
 
