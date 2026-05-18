@@ -36,9 +36,15 @@ static class Ansi
 
     private const int DrainIntervalMs = 100;
 
+    // Holds the most recent non-OCE drainer exception message. Surfaced to
+    // stderr by RunWithProgressAsync's finally block AFTER Spectre is done
+    // rendering, to avoid the very race the drainer exists to prevent.
+    private static string lastDrainerError;
+
     internal static void ResetForTests()
     {
         progressDepth = 0;
+        lastDrainerError = null;
         while (deferredOutput.TryDequeue(out _)) { }
     }
 
@@ -144,23 +150,27 @@ static class Ansi
 
     private static async Task DrainLoopAsync(CancellationToken ct)
     {
-        try
+        while (!ct.IsCancellationRequested)
         {
-            while (!ct.IsCancellationRequested)
+            try
             {
                 await Task.Delay(DrainIntervalMs, ct).ConfigureAwait(false);
                 DrainBatch();
             }
-        }
-        catch (OperationCanceledException)
-        {
-            // Expected on shutdown.
-        }
-        catch (Exception ex)
-        {
-            // Drainer should never bring down the download; surface but don't rethrow.
-            // The final DrainBatch() in RunWithProgressAsync's finally still runs.
-            Console.Error.WriteLine($"Ansi drainer error: {ex.Message}");
+            catch (OperationCanceledException)
+            {
+                // Expected on shutdown — exit the loop.
+                return;
+            }
+            catch (Exception ex)
+            {
+                // Drainer should never bring down the download and must keep
+                // running so the queue continues to flush. Record the error;
+                // RunWithProgressAsync's finally surfaces it to stderr after
+                // Spectre has finished rendering (so the message itself can't
+                // race the bar).
+                lastDrainerError = ex.Message;
+            }
         }
     }
 
@@ -229,6 +239,15 @@ static class Ansi
             catch (OperationCanceledException) { /* expected */ }
             Interlocked.Decrement(ref progressDepth);
             DrainBatch();   // final pass — progressDepth is 0, writes go to console directly
+
+            // Now safe to surface any drainer error: Spectre is no longer painting,
+            // stderr won't interleave with the bar.
+            var err = lastDrainerError;
+            if (err != null)
+            {
+                lastDrainerError = null;
+                Console.Error.WriteLine($"Ansi drainer error: {err}");
+            }
         }
     }
 }
