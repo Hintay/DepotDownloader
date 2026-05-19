@@ -8,10 +8,11 @@ using SteamKit2;
 
 namespace DepotDownloader
 {
-    sealed class SteamAppManifestDepot(uint depotId, ulong manifestId)
+    sealed class SteamAppManifestDepot(uint depotId, ulong manifestId, ulong? sizeOnDisk = null)
     {
         public uint DepotId { get; } = depotId;
         public ulong ManifestId { get; } = manifestId;
+        public ulong? SizeOnDisk { get; } = sizeOnDisk;
     }
 
     sealed class SteamAppManifest(
@@ -55,6 +56,12 @@ namespace DepotDownloader
             root.Children.Add(new KeyValue("name", manifest.Name));
             root.Children.Add(new KeyValue("installdir", manifest.InstallDir));
 
+            if (manifest.Depots.Count > 0 && manifest.Depots.All(depot => depot.SizeOnDisk.HasValue))
+            {
+                var sizeOnDisk = manifest.Depots.Aggregate(0UL, (size, depot) => size + depot.SizeOnDisk.Value);
+                root.Children.Add(new KeyValue("SizeOnDisk", sizeOnDisk.ToString()));
+            }
+
             if (manifest.BuildId != 0)
             {
                 root.Children.Add(new KeyValue("buildid", manifest.BuildId.ToString()));
@@ -73,6 +80,10 @@ namespace DepotDownloader
             {
                 var depotKv = new KeyValue(depot.DepotId.ToString());
                 depotKv.Children.Add(new KeyValue("manifest", depot.ManifestId.ToString()));
+                if (depot.SizeOnDisk.HasValue)
+                {
+                    depotKv.Children.Add(new KeyValue("size", depot.SizeOnDisk.Value.ToString()));
+                }
                 depots.Children.Add(depotKv);
             }
             root.Children.Add(depots);

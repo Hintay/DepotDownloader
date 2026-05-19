@@ -58,6 +58,7 @@ namespace DepotDownloader
             public string Branch { get; } = branch;
             public string InstallDir { get; } = installDir;
             public byte[] DepotKey { get; } = depotKey;
+            public ulong? SizeOnDisk { get; set; }
         }
 
         static bool CreateDirectories(uint depotId, uint depotVersion, out string installDir)
@@ -359,7 +360,7 @@ namespace DepotDownloader
                 GetSteam3AppBuildNumber(appId, branch),
                 language,
                 stateFlags,
-                depots.Select(depot => new SteamAppManifestDepot(depot.DepotId, depot.ManifestId)).ToList());
+                depots.Select(depot => new SteamAppManifestDepot(depot.DepotId, depot.ManifestId, depot.SizeOnDisk)).ToList());
 
             AppManifestWriter.WriteToFile(manifestPath, manifest);
             (Config.JsonProgress ? Console.Error : Console.Out).WriteLine("Generated appmanifest metadata file: {0}", manifestPath);
@@ -1240,6 +1241,13 @@ namespace DepotDownloader
 
                     claimedFileNames.UnionWith(depotsToDownload[i].allFileNames);
                 }
+            }
+
+            foreach (var depotFileData in depotsToDownload)
+            {
+                depotFileData.depotDownloadInfo.SizeOnDisk = depotFileData.filteredFiles
+                    .Where(file => !file.Flags.HasFlag(EDepotFileFlag.Directory))
+                    .Aggregate(0UL, (size, file) => size + file.TotalSize);
             }
 
             // Compute per-depot totalChunks AFTER any de-dup pruning above, so

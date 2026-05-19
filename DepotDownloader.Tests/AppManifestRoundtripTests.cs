@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using DepotDownloader;
+using SteamKit2;
 using Xunit;
 
 namespace DepotDownloader.Tests
@@ -71,6 +72,41 @@ namespace DepotDownloader.Tests
 
                 Assert.NotNull(read);
                 Assert.Equal(1026u, read.StateFlags);
+            }
+            finally
+            {
+                if (File.Exists(path)) File.Delete(path);
+            }
+        }
+
+        [Fact]
+        public void Writer_Emits_TotalAndPerDepotSizes_WhenDepotSizesAreKnown()
+        {
+            var manifest = new SteamAppManifest(
+                appId: 601150,
+                name: "Test",
+                installDir: "Test",
+                buildId: 0,
+                language: "english",
+                stateFlags: 4,
+                depots: new List<SteamAppManifestDepot>
+                {
+                    new(601151, 1UL, 10UL),
+                    new(601152, 2UL, 20UL),
+                    new(601153, 3UL, 30UL),
+                });
+
+            var path = Path.Combine(Path.GetTempPath(), $"acf-size-{Guid.NewGuid():N}.acf");
+            try
+            {
+                AppManifestWriter.WriteToFile(path, manifest);
+
+                var root = KeyValue.LoadAsText(path);
+
+                Assert.Equal(60UL, root["SizeOnDisk"].AsUnsignedLong());
+                Assert.Equal(10UL, root["InstalledDepots"]["601151"]["size"].AsUnsignedLong());
+                Assert.Equal(20UL, root["InstalledDepots"]["601152"]["size"].AsUnsignedLong());
+                Assert.Equal(30UL, root["InstalledDepots"]["601153"]["size"].AsUnsignedLong());
             }
             finally
             {
