@@ -695,8 +695,20 @@ namespace DepotDownloader
                     DepotConfigStore.Save();
                 }
 
-                // Main-depot prompt — advanced opt-in via [y/N], only when > 1 non-shared
-                // main depot remains after the platform filter. Skip when the user named
+                var dlcCandidates = new List<uint>();
+                if (Config.BatchLuaDownload && Config.LuaOwnedApps != null)
+                {
+                    var extended = GetSteam3AppSection(appId, EAppInfoSection.Extended);
+                    dlcCandidates = AppSelectionPrompt.ComputeDlcCandidates(
+                        Config.LuaOwnedApps,
+                        appId,
+                        depots,
+                        extended);
+                }
+
+                // Main-depot prompt — advanced opt-in via [y/N], when multiple non-shared
+                // main depots remain after the platform filter, or when DLCs are selectable.
+                // Skip when the user named
                 // depots explicitly via -depot: the prompt would enumerate ALL PICS depots
                 // (not just user-named ones), and a follow-up prune at the end of the
                 // depot loop would silently drop CLI-named depots the user did request.
@@ -716,7 +728,7 @@ namespace DepotDownloader
                         language: language ?? "english",
                         allLanguages: Config.DownloadAllLanguages);
 
-                    if (mainCandidates.Count > 1)
+                    if (AppSelectionPrompt.ShouldPromptMainDepots(mainCandidates.Count, dlcCandidates.Count > 0))
                     {
                         var selected = AppSelectionPrompt.PromptMainDepots(mainCandidates, depots);
                         var selectedSet = new HashSet<uint>(selected);
@@ -738,13 +750,6 @@ namespace DepotDownloader
                     && Config.BatchLuaDownload
                     && Config.LuaOwnedApps != null)
                 {
-                    var extended = GetSteam3AppSection(appId, EAppInfoSection.Extended);
-                    var dlcCandidates = AppSelectionPrompt.ComputeDlcCandidates(
-                        Config.LuaOwnedApps,
-                        appId,
-                        depots,
-                        extended);
-
                     if (dlcCandidates.Count > 0)
                     {
                         // Batch-prefetch PICS for each DLC app so the prompt can show
@@ -841,10 +846,7 @@ namespace DepotDownloader
                     // mode they were never added by the loop above (which skips them
                     // via the new `deselectedMainDepots.Contains(id)` continue); in
                     // Lua batch mode they're in `depotManifestIds` from Program.cs.
-                    if (deselectedMainDepots.Count > 0)
-                    {
-                        depotManifestIds.RemoveAll(entry => deselectedMainDepots.Contains(entry.depotId));
-                    }
+                    AppSelectionPrompt.RemoveDeselectedMainDepots(depotManifestIds, deselectedMainDepots);
 
                     if (depotManifestIds.Count == 0 && !hasSpecificDepots)
                     {

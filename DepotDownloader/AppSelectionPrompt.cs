@@ -160,6 +160,23 @@ namespace DepotDownloader
             return fromApp != 0 && fromApp != appId;
         }
 
+        internal static bool ShouldPromptMainDepots(int mainDepotCount, bool hasSelectableDlcs)
+        {
+            return mainDepotCount > 1 || (mainDepotCount == 1 && hasSelectableDlcs);
+        }
+
+        internal static void RemoveDeselectedMainDepots(
+            List<(uint depotId, ulong manifestId)> depotManifestIds,
+            HashSet<uint> deselectedMainDepots)
+        {
+            if (depotManifestIds == null || deselectedMainDepots == null || deselectedMainDepots.Count == 0)
+            {
+                return;
+            }
+
+            depotManifestIds.RemoveAll(entry => deselectedMainDepots.Contains(entry.depotId));
+        }
+
         public static List<uint> ComputeDlcCandidates(
             IEnumerable<uint> luaOwnedAppIds,
             uint appId,
@@ -408,7 +425,7 @@ namespace DepotDownloader
             IReadOnlyList<uint> candidates,
             KeyValue mainAppDepots)
         {
-            if (candidates.Count <= 1)
+            if (candidates.Count == 0)
             {
                 return candidates;
             }

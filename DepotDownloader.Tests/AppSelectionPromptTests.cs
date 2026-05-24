@@ -213,6 +213,42 @@ namespace DepotDownloader.Tests
         }
 
         [Fact]
+        public void ShouldPromptMainDepots_SingleMainDepotWithDlc_ReturnsTrue()
+        {
+            var result = AppSelectionPrompt.ShouldPromptMainDepots(
+                mainDepotCount: 1,
+                hasSelectableDlcs: true);
+
+            Assert.True(result);
+        }
+
+        [Fact]
+        public void ShouldPromptMainDepots_SingleMainDepotWithoutDlc_ReturnsFalse()
+        {
+            var result = AppSelectionPrompt.ShouldPromptMainDepots(
+                mainDepotCount: 1,
+                hasSelectableDlcs: false);
+
+            Assert.False(result);
+        }
+
+        [Fact]
+        public void RemoveDeselectedMainDepots_RemovesLuaBatchDepotFromWorkingList()
+        {
+            var depotManifestIds = new List<(uint depotId, ulong manifestId)>
+            {
+                (601151u, 111u),
+                (601152u, 222u),
+                (601153u, 333u),
+            };
+            var deselectedMainDepots = new HashSet<uint> { 601152u };
+
+            AppSelectionPrompt.RemoveDeselectedMainDepots(depotManifestIds, deselectedMainDepots);
+
+            Assert.Equal(new[] { 601151u, 601153u }, depotManifestIds.ConvertAll(entry => entry.depotId));
+        }
+
+        [Fact]
         public void ComputeMainDepotCandidates_PlatformMismatch_IsExcluded()
         {
             var depots = new KeyValue("depots");
