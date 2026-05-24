@@ -1207,6 +1207,11 @@ namespace DepotDownloader
                 && !resumeStateStore.State.HasCompletedChunks(file);
         }
 
+        internal static bool ShouldLoadNewManifestFromDirectory(DownloadConfig config)
+        {
+            return config?.UseManifestDirectory == true && !config.IgnoreLuaManifestIds;
+        }
+
         private class DepotDownloadCounter
         {
             public ulong completeDownloadSize;
@@ -1399,7 +1404,7 @@ namespace DepotDownloader
                     Util.SaveManifestToFile(configDir, newManifest);
                 }
             }
-            else if (Config.UseManifestDirectory)
+            else if (ShouldLoadNewManifestFromDirectory(Config))
             {
                 newManifest = Util.LoadManifestFromFile(Config.ManifestDirectory, depot.DepotId, depot.ManifestId, true);
 

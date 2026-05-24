@@ -77,6 +77,30 @@ namespace DepotDownloader.Tests
         }
 
         [Fact]
+        public void ShouldLoadNewManifestFromDirectory_IgnoreLuaManifestIds_ReturnsFalse()
+        {
+            var config = new DownloadConfig
+            {
+                UseManifestDirectory = true,
+                IgnoreLuaManifestIds = true,
+            };
+
+            Assert.False(ContentDownloader.ShouldLoadNewManifestFromDirectory(config));
+        }
+
+        [Fact]
+        public void ShouldLoadNewManifestFromDirectory_ManifestDirectoryWithoutIgnoreLuaManifestIds_ReturnsTrue()
+        {
+            var config = new DownloadConfig
+            {
+                UseManifestDirectory = true,
+                IgnoreLuaManifestIds = false,
+            };
+
+            Assert.True(ContentDownloader.ShouldLoadNewManifestFromDirectory(config));
+        }
+
+        [Fact]
         public void GetLuaBatchDepotManifestIds_UsesAddAppIdKeyDepotsAndOnlyAppliesMatchingManifestIds()
         {
             var config = new DownloadConfig
