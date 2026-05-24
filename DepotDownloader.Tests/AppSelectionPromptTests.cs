@@ -42,6 +42,17 @@ namespace DepotDownloader.Tests
             Assert.True(DepotKeyStore.ContainsKey(940500u));
         }
 
+        [Fact]
+        public void Lua_SetManifestId_IsIgnoredWhenRequested()
+        {
+            const string lua = "addappid(601150)\nsetManifestid(601151, 123456789)";
+
+            var data = DepotKeyStore.AddFromLua(lua, ignoreManifestIds: true);
+
+            Assert.Empty(data.ManifestIds);
+            Assert.Contains(601150u, data.OwnedApps);
+        }
+
         // --- ExtractPlatformChoices ---
 
         [Fact]

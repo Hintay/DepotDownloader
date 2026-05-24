@@ -171,6 +171,7 @@ namespace DepotDownloader
             ContentDownloader.Config.LuaManifestIds = [];
             ContentDownloader.Config.LuaAppTokens = [];
             ContentDownloader.Config.LuaOwnedApps = [];
+            ContentDownloader.Config.IgnoreLuaManifestIds = HasParameter(args, "-no-lua-mid");
 
             ContentDownloader.Config.InstallDirectory = GetParameter<string>(args, "-dir");
             ContentDownloader.Config.MigrateDepotInstalls = HasParameter(args, "-migrate-depot");
@@ -248,7 +249,7 @@ namespace DepotDownloader
                 try
                 {
                     var lua = File.ReadAllText(ContentDownloader.Config.LuaFile);
-                    var luaDepotData = DepotKeyStore.AddFromLua(lua);
+                    var luaDepotData = DepotKeyStore.AddFromLua(lua, ContentDownloader.Config.IgnoreLuaManifestIds);
                     ContentDownloader.Config.LuaManifestIds = luaDepotData.ManifestIds;
                     ContentDownloader.Config.LuaAppTokens = luaDepotData.AppTokens;
                     ContentDownloader.Config.LuaOwnedApps = luaDepotData.OwnedApps;
@@ -695,6 +696,7 @@ namespace DepotDownloader
             Console.WriteLine("  -depotkeys <file>        - a list of depot keys to use ('depotID;hexKey' per line).");
             Console.WriteLine("  -lua [file]              - a Lua file to load depot keys and manifest ids from.");
             Console.WriteLine("                             if file is omitted, uses <manifestdir>/<appid>.lua or ./<appid>/<appid>.lua when available.");
+            Console.WriteLine("  -no-lua-mid             - ignore setManifestid entries from Lua files.");
             Console.WriteLine("  -manifestfile <file>     - Use Specified Manifest file from Steam.");
             Console.WriteLine("  -manifestdir <dir>       - Use Steam manifest files from a directory by depot and manifest id.");
             Console.WriteLine("  -appmanifest             - Generate a minimal Steam appmanifest ACF metadata file.");

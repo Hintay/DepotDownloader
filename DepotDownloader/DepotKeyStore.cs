@@ -34,7 +34,7 @@ namespace DepotDownloader
             }
         }
 
-        public static LuaDepotData AddFromLua(string lua)
+        public static LuaDepotData AddFromLua(string lua, bool ignoreManifestIds = false)
         {
             var data = new LuaDepotData();
             var script = new Script(CoreModules.None);
@@ -59,7 +59,7 @@ namespace DepotDownloader
 
             script.Globals["setManifestid"] = CallbackFunction.FromDelegate(script, new Func<ScriptExecutionContext, CallbackArguments, DynValue>((context, args) =>
             {
-                if (TryGetUInt32(args, 0, out var depotId) && TryGetUInt64(args, 1, out var manifestId))
+                if (!ignoreManifestIds && TryGetUInt32(args, 0, out var depotId) && TryGetUInt64(args, 1, out var manifestId))
                 {
                     data.ManifestIds[depotId] = manifestId;
                 }

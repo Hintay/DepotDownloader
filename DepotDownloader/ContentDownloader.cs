@@ -1442,6 +1442,12 @@ namespace DepotDownloader
                                     depot.AppId,
                                     depot.ManifestId,
                                     depot.Branch);
+
+                                manifestRequestCode = await ManifestRequestCodeProvider.GetWithFallbackAsync(
+                                    manifestRequestCode,
+                                    depot.ManifestId,
+                                    ManifestRequestCodeProvider.GetFromGmrcAsync).ConfigureAwait(false);
+
                                 // This code will hopefully be valid for one period following the issuing period
                                 manifestRequestCodeExpiration = now.Add(TimeSpan.FromMinutes(5));
 
