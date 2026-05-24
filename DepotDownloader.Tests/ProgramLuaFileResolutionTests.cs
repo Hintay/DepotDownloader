@@ -2,6 +2,7 @@
 // in file 'LICENSE', which is part of this source code package.
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using DepotDownloader;
 using Xunit;
@@ -114,6 +115,56 @@ namespace DepotDownloader.Tests
             var message = ContentDownloader.GetDownloadingManifestMessage(1817491u, 2957411760343078601UL);
 
             Assert.Equal("Downloading depot 1817491 manifest 2957411760343078601 from Steam/CDN.", message);
+        }
+
+        [Fact]
+        public void GetResolvedLatestManifestMessage_IncludesDepotOwnerBranchAndManifest()
+        {
+            var message = ContentDownloader.GetResolvedLatestManifestMessage(1817491u, 1817490u, "public", 2468627520310452088UL);
+
+            Assert.Equal("Resolved latest manifest for depot 1817491 from app 1817490 branch 'public': 2468627520310452088.", message);
+        }
+
+        [Fact]
+        public void GetInstalledManifestComparisonMessage_IncludesInstalledAndTargetManifest()
+        {
+            var message = ContentDownloader.GetInstalledManifestComparisonMessage(1817491u, 2957411760343078601UL, 2468627520310452088UL);
+
+            Assert.Equal("Appmanifest comparison for depot 1817491: installed manifest 2957411760343078601, target manifest 2468627520310452088.", message);
+        }
+
+        [Fact]
+        public void ShouldSkipFullyInstalledApp_OldAppmanifestManifestAndNewSteamManifest_ReturnsFalse()
+        {
+            var installedDepots = new Dictionary<uint, ulong>
+            {
+                [1817491u] = 2957411760343078601UL,
+            };
+            var targetDepots = new List<(uint depotId, ulong manifestId)>
+            {
+                (1817491u, 2468627520310452088UL),
+            };
+
+            var shouldSkip = ContentDownloader.ShouldSkipFullyInstalledApp(installedDepots, targetDepots, verifyAll: false);
+
+            Assert.False(shouldSkip);
+        }
+
+        [Fact]
+        public void ShouldSkipFullyInstalledApp_AppmanifestMatchesSteamManifest_ReturnsTrue()
+        {
+            var installedDepots = new Dictionary<uint, ulong>
+            {
+                [1817491u] = 2468627520310452088UL,
+            };
+            var targetDepots = new List<(uint depotId, ulong manifestId)>
+            {
+                (1817491u, 2468627520310452088UL),
+            };
+
+            var shouldSkip = ContentDownloader.ShouldSkipFullyInstalledApp(installedDepots, targetDepots, verifyAll: false);
+
+            Assert.True(shouldSkip);
         }
 
         [Fact]

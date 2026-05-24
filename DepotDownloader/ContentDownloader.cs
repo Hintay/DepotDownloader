@@ -997,12 +997,16 @@ namespace DepotDownloader
                     foreach (var (depotId, manifestId) in infos.Select(d => (d.DepotId, d.ManifestId)))
                     {
                         installed.InstalledDepots.TryGetValue(depotId, out var recorded);
+                        (Config.JsonProgress ? Console.Error : Console.Out).WriteLine(GetInstalledManifestComparisonMessage(depotId, recorded, manifestId));
                         if (recorded != manifestId)
                         {
                             mismatched++;
                         }
                     }
-                    if (mismatched == 0 && infos.Count > 0 && !Config.VerifyAll)
+                    if (ShouldSkipFullyInstalledApp(
+                        installed.InstalledDepots,
+                        infos.Select(d => (d.DepotId, d.ManifestId)),
+                        Config.VerifyAll))
                     {
                         (Config.JsonProgress ? Console.Error : Console.Out).WriteLine("App {0} ({1}) is fully installed (build {2}). Nothing to do.", appId, appName, installed.BuildId);
                         appSuccess = true;  // Already fully installed counts as success.
@@ -1103,6 +1107,8 @@ namespace DepotDownloader
                     (Config.JsonProgress ? Console.Error : Console.Out).WriteLine("Depot {0} missing public subsection or manifest section.", depotId);
                     return null;
                 }
+
+                (Config.JsonProgress ? Console.Error : Console.Out).WriteLine(GetResolvedLatestManifestMessage(depotId, appId, branch, manifestId));
             }
 
             byte[] depotKey = null;
@@ -1220,6 +1226,40 @@ namespace DepotDownloader
         internal static string GetDownloadingManifestMessage(uint depotId, ulong manifestId)
         {
             return string.Format("Downloading depot {0} manifest {1} from Steam/CDN.", depotId, manifestId);
+        }
+
+        internal static string GetResolvedLatestManifestMessage(uint depotId, uint appId, string branch, ulong manifestId)
+        {
+            return string.Format("Resolved latest manifest for depot {0} from app {1} branch '{2}': {3}.", depotId, appId, branch, manifestId);
+        }
+
+        internal static string GetInstalledManifestComparisonMessage(uint depotId, ulong installedManifestId, ulong targetManifestId)
+        {
+            return string.Format("Appmanifest comparison for depot {0}: installed manifest {1}, target manifest {2}.", depotId, installedManifestId, targetManifestId);
+        }
+
+        internal static bool ShouldSkipFullyInstalledApp(
+            IReadOnlyDictionary<uint, ulong> installedDepots,
+            IEnumerable<(uint depotId, ulong manifestId)> targetDepots,
+            bool verifyAll)
+        {
+            if (verifyAll || installedDepots == null || targetDepots == null)
+            {
+                return false;
+            }
+
+            var anyTargetDepot = false;
+            foreach (var (depotId, manifestId) in targetDepots)
+            {
+                anyTargetDepot = true;
+                installedDepots.TryGetValue(depotId, out var installedManifestId);
+                if (installedManifestId != manifestId)
+                {
+                    return false;
+                }
+            }
+
+            return anyTargetDepot;
         }
 
         private class DepotDownloadCounter
