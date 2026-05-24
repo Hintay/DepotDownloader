@@ -15,6 +15,7 @@ namespace DepotDownloader
         public sealed class LuaDepotData
         {
             public Dictionary<uint, ulong> ManifestIds { get; } = [];
+            public HashSet<uint> KeyDepotIds { get; } = [];
             public Dictionary<uint, ulong> AppTokens { get; } = [];
             public HashSet<uint> OwnedApps { get; } = [];
         }
@@ -51,6 +52,7 @@ namespace DepotDownloader
                     if (args.Count >= 3 && TryGetString(args[2], out var depotKey))
                     {
                         depotKeysCache[appId] = StringToByteArray(depotKey);
+                        data.KeyDepotIds.Add(appId);
                     }
                 }
 

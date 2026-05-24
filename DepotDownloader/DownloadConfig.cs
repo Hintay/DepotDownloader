@@ -43,6 +43,7 @@ namespace DepotDownloader
         public bool UseLuaFile { get; set; }
         public string LuaFile { get; set; }
         public Dictionary<uint, ulong> LuaManifestIds { get; set; }
+        public HashSet<uint> LuaKeyDepotIds { get; set; }
         public Dictionary<uint, ulong> LuaAppTokens { get; set; }
         public bool IgnoreLuaManifestIds { get; set; }
         public bool BatchLuaDownload { get; set; }

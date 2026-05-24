@@ -53,6 +53,16 @@ namespace DepotDownloader.Tests
             Assert.Contains(601150u, data.OwnedApps);
         }
 
+        [Fact]
+        public void Lua_ThreeArgAddAppId_CapturesKeyDepotId()
+        {
+            const string lua = "addappid(601151, 1, \"deadbeef\")";
+
+            var data = DepotKeyStore.AddFromLua(lua, ignoreManifestIds: true);
+
+            Assert.Contains(601151u, data.KeyDepotIds);
+        }
+
         // --- ExtractPlatformChoices ---
 
         [Fact]

@@ -43,5 +43,62 @@ namespace DepotDownloader.Tests
 
             Assert.Equal(luaPath, resolved);
         }
+
+        [Fact]
+        public void GetLuaBatchDepotManifestIds_IgnoreLuaManifestIds_UsesLuaKeyDepotIdsWithLatestManifest()
+        {
+            var config = new DownloadConfig
+            {
+                IgnoreLuaManifestIds = true,
+                LuaManifestIds = [],
+                LuaKeyDepotIds = [601151u],
+            };
+
+            var depotManifestIds = Program.GetLuaBatchDepotManifestIds(config);
+
+            var entry = Assert.Single(depotManifestIds);
+            Assert.Equal(601151u, entry.depotId);
+            Assert.Equal(ContentDownloader.INVALID_MANIFEST_ID, entry.manifestId);
+        }
+
+        [Fact]
+        public void GetLuaBatchDepotManifestIds_IgnoreLuaManifestIds_DoesNotUseSetManifestDepotIds()
+        {
+            var config = new DownloadConfig
+            {
+                IgnoreLuaManifestIds = true,
+                LuaManifestIds = [],
+                LuaKeyDepotIds = [],
+            };
+
+            var depotManifestIds = Program.GetLuaBatchDepotManifestIds(config);
+
+            Assert.Empty(depotManifestIds);
+        }
+
+        [Fact]
+        public void GetLuaBatchDepotManifestIds_UsesAddAppIdKeyDepotsAndOnlyAppliesMatchingManifestIds()
+        {
+            var config = new DownloadConfig
+            {
+                IgnoreLuaManifestIds = false,
+                LuaManifestIds = new()
+                {
+                    [601151u] = 111UL,
+                    [601152u] = 222UL,
+                },
+                LuaKeyDepotIds = [601151u, 601153u],
+            };
+
+            var depotManifestIds = Program.GetLuaBatchDepotManifestIds(config);
+
+            Assert.Equal(
+                new[]
+                {
+                    (depotId: 601151u, manifestId: 111UL),
+                    (depotId: 601153u, manifestId: ContentDownloader.INVALID_MANIFEST_ID),
+                },
+                depotManifestIds);
+        }
     }
 }

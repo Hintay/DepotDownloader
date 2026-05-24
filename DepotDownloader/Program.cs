@@ -169,6 +169,7 @@ namespace DepotDownloader
             ContentDownloader.Config.UseLuaFile = HasParameter(args, "-lua");
             ContentDownloader.Config.LuaFile = GetOptionalParameter(args, "-lua");
             ContentDownloader.Config.LuaManifestIds = [];
+            ContentDownloader.Config.LuaKeyDepotIds = [];
             ContentDownloader.Config.LuaAppTokens = [];
             ContentDownloader.Config.LuaOwnedApps = [];
             ContentDownloader.Config.IgnoreLuaManifestIds = HasParameter(args, "-no-lua-mid");
@@ -251,6 +252,7 @@ namespace DepotDownloader
                     var lua = File.ReadAllText(ContentDownloader.Config.LuaFile);
                     var luaDepotData = DepotKeyStore.AddFromLua(lua, ContentDownloader.Config.IgnoreLuaManifestIds);
                     ContentDownloader.Config.LuaManifestIds = luaDepotData.ManifestIds;
+                    ContentDownloader.Config.LuaKeyDepotIds = luaDepotData.KeyDepotIds;
                     ContentDownloader.Config.LuaAppTokens = luaDepotData.AppTokens;
                     ContentDownloader.Config.LuaOwnedApps = luaDepotData.OwnedApps;
 
@@ -419,14 +421,14 @@ namespace DepotDownloader
                         return (depotId, manifestId);
                     }));
                 }
-                else if (ContentDownloader.Config.LuaManifestIds != null && ContentDownloader.Config.LuaManifestIds.Count > 0)
-                {
-                    depotManifestIds.AddRange(ContentDownloader.Config.LuaManifestIds.Select(x => (x.Key, x.Value)));
-                    ContentDownloader.Config.BatchLuaDownload = true;
-                }
                 else
                 {
-                    depotManifestIds.AddRange(depotIdList.Select(depotId => (depotId, ContentDownloader.INVALID_MANIFEST_ID)));
+                    var luaBatchDepotManifestIds = GetLuaBatchDepotManifestIds(ContentDownloader.Config);
+                    if (luaBatchDepotManifestIds.Count > 0)
+                    {
+                        depotManifestIds.AddRange(luaBatchDepotManifestIds);
+                        ContentDownloader.Config.BatchLuaDownload = true;
+                    }
                 }
 
                 PrintUnconsumedArgs(args);
@@ -488,6 +490,28 @@ namespace DepotDownloader
 
             var currentDirectoryLuaFile = Path.Combine(appDirectory, appLuaFileName);
             return File.Exists(currentDirectoryLuaFile) ? currentDirectoryLuaFile : null;
+        }
+
+        internal static List<(uint depotId, ulong manifestId)> GetLuaBatchDepotManifestIds(DownloadConfig config)
+        {
+            if (config?.LuaKeyDepotIds != null && config.LuaKeyDepotIds.Count > 0)
+            {
+                return config.LuaKeyDepotIds
+                    .OrderBy(depotId => depotId)
+                    .Select(depotId =>
+                    {
+                        var manifestId = !config.IgnoreLuaManifestIds
+                            && config.LuaManifestIds != null
+                            && config.LuaManifestIds.TryGetValue(depotId, out var luaManifestId)
+                                ? luaManifestId
+                                : ContentDownloader.INVALID_MANIFEST_ID;
+
+                        return (depotId, manifestId);
+                    })
+                    .ToList();
+            }
+
+            return [];
         }
 
         static bool InitializeSteam(string username, string password)
