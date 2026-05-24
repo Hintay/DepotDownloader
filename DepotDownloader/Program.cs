@@ -233,18 +233,15 @@ namespace DepotDownloader
 
             if (ContentDownloader.Config.UseLuaFile)
             {
-                if (string.IsNullOrWhiteSpace(ContentDownloader.Config.LuaFile) && ContentDownloader.Config.UseManifestDirectory)
-                {
-                    var appLuaFile = Path.Combine(ContentDownloader.Config.ManifestDirectory, $"{appId}.lua");
-                    if (File.Exists(appLuaFile))
-                    {
-                        ContentDownloader.Config.LuaFile = appLuaFile;
-                    }
-                }
+                ContentDownloader.Config.LuaFile = ResolveLuaFile(
+                    appId,
+                    ContentDownloader.Config.LuaFile,
+                    ContentDownloader.Config.UseManifestDirectory,
+                    ContentDownloader.Config.ManifestDirectory);
 
                 if (string.IsNullOrWhiteSpace(ContentDownloader.Config.LuaFile))
                 {
-                    Console.WriteLine("Error: -lua requires a file path or a matching <appid>.lua in -manifestdir.");
+                    Console.WriteLine("Error: -lua requires a file path, a matching <appid>.lua in -manifestdir, or <appid>/<appid>.lua in the current directory.");
                     return 1;
                 }
 
@@ -468,6 +465,30 @@ namespace DepotDownloader
             return 0;
         }
 
+        internal static string ResolveLuaFile(uint appId, string luaFile, bool useManifestDirectory, string manifestDirectory)
+        {
+            if (!string.IsNullOrWhiteSpace(luaFile))
+            {
+                return luaFile;
+            }
+
+            var appLuaFileName = $"{appId}.lua";
+            if (useManifestDirectory)
+            {
+                var appLuaFile = Path.Combine(manifestDirectory, appLuaFileName);
+                return File.Exists(appLuaFile) ? appLuaFile : null;
+            }
+
+            var appDirectory = Path.Combine(Directory.GetCurrentDirectory(), appId.ToString());
+            if (!Directory.Exists(appDirectory))
+            {
+                return null;
+            }
+
+            var currentDirectoryLuaFile = Path.Combine(appDirectory, appLuaFileName);
+            return File.Exists(currentDirectoryLuaFile) ? currentDirectoryLuaFile : null;
+        }
+
         static bool InitializeSteam(string username, string password)
         {
             if (!ContentDownloader.Config.UseQrCode)
@@ -673,7 +694,7 @@ namespace DepotDownloader
             Console.WriteLine("  -V or --version          - print version and runtime.");
             Console.WriteLine("  -depotkeys <file>        - a list of depot keys to use ('depotID;hexKey' per line).");
             Console.WriteLine("  -lua [file]              - a Lua file to load depot keys and manifest ids from.");
-            Console.WriteLine("                             if file is omitted, uses <manifestdir>/<appid>.lua when available.");
+            Console.WriteLine("                             if file is omitted, uses <manifestdir>/<appid>.lua or ./<appid>/<appid>.lua when available.");
             Console.WriteLine("  -manifestfile <file>     - Use Specified Manifest file from Steam.");
             Console.WriteLine("  -manifestdir <dir>       - Use Steam manifest files from a directory by depot and manifest id.");
             Console.WriteLine("  -appmanifest             - Generate a minimal Steam appmanifest ACF metadata file.");
