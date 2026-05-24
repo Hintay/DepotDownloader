@@ -46,6 +46,38 @@ namespace DepotDownloader.Tests
         }
 
         [Fact]
+        public void ResolveMidOverridesFile_NoExplicitPath_UsesLuaDirectoryShortUnderscoreName()
+        {
+            var luaDir = Path.Combine(scratch, "1721470");
+            Directory.CreateDirectory(luaDir);
+            var luaPath = Path.Combine(luaDir, "1721470.lua");
+            var overridesPath = Path.Combine(luaDir, "mid_overrides.json");
+            File.WriteAllText(luaPath, "addappid(1721470)");
+            File.WriteAllText(overridesPath, "{}");
+
+            var resolved = Program.ResolveMidOverridesFile(null, luaPath);
+
+            Assert.Equal(overridesPath, resolved);
+        }
+
+        [Fact]
+        public void LoadMidOverrides_AcceptsNumberAndStringManifestIds()
+        {
+            var path = Path.Combine(scratch, "mid_overrides.json");
+            File.WriteAllText(path, """
+            {
+              "1817491": 2468627520310452088,
+              "2555198": "7976244025258826224"
+            }
+            """);
+
+            var overrides = Program.LoadMidOverrides(path);
+
+            Assert.Equal(2468627520310452088UL, overrides[1817491u]);
+            Assert.Equal(7976244025258826224UL, overrides[2555198u]);
+        }
+
+        [Fact]
         public void GetLuaBatchDepotManifestIds_IgnoreLuaManifestIds_UsesLuaKeyDepotIdsWithLatestManifest()
         {
             var config = new DownloadConfig
@@ -75,6 +107,31 @@ namespace DepotDownloader.Tests
             var depotManifestIds = Program.GetLuaBatchDepotManifestIds(config);
 
             Assert.Empty(depotManifestIds);
+        }
+
+        [Fact]
+        public void GetLuaBatchDepotManifestIds_MidOverrideWinsWhenIgnoringLuaManifestIds()
+        {
+            var config = new DownloadConfig
+            {
+                IgnoreLuaManifestIds = true,
+                LuaManifestIds = [],
+                LuaKeyDepotIds = [1817491u, 2555198u],
+                ManifestIdOverrides = new()
+                {
+                    [1817491u] = 2468627520310452088UL,
+                },
+            };
+
+            var depotManifestIds = Program.GetLuaBatchDepotManifestIds(config);
+
+            Assert.Equal(
+                new[]
+                {
+                    (depotId: 1817491u, manifestId: 2468627520310452088UL),
+                    (depotId: 2555198u, manifestId: ContentDownloader.INVALID_MANIFEST_ID),
+                },
+                depotManifestIds);
         }
 
         [Fact]

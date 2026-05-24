@@ -8,6 +8,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using SteamKit2;
@@ -173,6 +174,7 @@ namespace DepotDownloader
             ContentDownloader.Config.LuaAppTokens = [];
             ContentDownloader.Config.LuaOwnedApps = [];
             ContentDownloader.Config.LuaDeclaredApps = [];
+            ContentDownloader.Config.ManifestIdOverrides = [];
             ContentDownloader.Config.IgnoreLuaManifestIds = HasParameter(args, "-no-lua-mid");
 
             ContentDownloader.Config.InstallDirectory = GetParameter<string>(args, "-dir");
@@ -202,6 +204,7 @@ namespace DepotDownloader
             ContentDownloader.Config.ManifestFile = GetParameter<string>(args, "-manifestfile");
             ContentDownloader.Config.UseManifestDirectory = HasParameter(args, "-manifestdir");
             ContentDownloader.Config.ManifestDirectory = GetParameter<string>(args, "-manifestdir");
+            var explicitMidOverridesFile = GetParameter<string>(args, "-mid-overrides");
             ContentDownloader.Config.GenerateAppManifest = HasParameter(args, "-appmanifest");
             ContentDownloader.Config.JsonProgress = HasParameter(args, "--json-progress");
             JsonProgressLogger.Enabled = ContentDownloader.Config.JsonProgress;
@@ -263,6 +266,20 @@ namespace DepotDownloader
                 catch (Exception ex)
                 {
                     Console.WriteLine("Warning: Unable to load Lua file: {0}", ex.ToString());
+                }
+
+                var midOverridesFile = ResolveMidOverridesFile(explicitMidOverridesFile, ContentDownloader.Config.LuaFile);
+                if (!string.IsNullOrWhiteSpace(midOverridesFile))
+                {
+                    try
+                    {
+                        ContentDownloader.Config.ManifestIdOverrides = LoadMidOverrides(midOverridesFile);
+                        Console.WriteLine("Using MID overrides file: '{0}'.", midOverridesFile);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine("Warning: Unable to load MID overrides file: {0}", ex.ToString());
+                    }
                 }
             }
 
@@ -494,6 +511,81 @@ namespace DepotDownloader
             return File.Exists(currentDirectoryLuaFile) ? currentDirectoryLuaFile : null;
         }
 
+        internal static string ResolveMidOverridesFile(string explicitPath, string luaFile)
+        {
+            if (!string.IsNullOrWhiteSpace(explicitPath))
+            {
+                return explicitPath;
+            }
+
+            if (string.IsNullOrWhiteSpace(luaFile))
+            {
+                return null;
+            }
+
+            var luaDirectory = Path.GetDirectoryName(luaFile);
+            if (string.IsNullOrWhiteSpace(luaDirectory))
+            {
+                luaDirectory = Directory.GetCurrentDirectory();
+            }
+
+            foreach (var fileName in new[]
+            {
+                "mid_overrides.json",
+                "mid-overrides.json",
+                "manifest_overrides.json",
+                "manifest-overrides.json",
+            })
+            {
+                var candidate = Path.Combine(luaDirectory, fileName);
+                if (File.Exists(candidate))
+                {
+                    return candidate;
+                }
+            }
+
+            return null;
+        }
+
+        internal static Dictionary<uint, ulong> LoadMidOverrides(string path)
+        {
+            var json = File.ReadAllText(path);
+            var result = new Dictionary<uint, ulong>();
+            using var document = JsonDocument.Parse(json);
+
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                throw new FormatException("MID overrides file must contain a JSON object.");
+            }
+
+            foreach (var property in document.RootElement.EnumerateObject())
+            {
+                if (!uint.TryParse(property.Name, out var depotId))
+                {
+                    throw new FormatException($"Invalid depot id in MID overrides file: {property.Name}");
+                }
+
+                ulong manifestId;
+                if (property.Value.ValueKind == JsonValueKind.Number)
+                {
+                    manifestId = property.Value.GetUInt64();
+                }
+                else if (property.Value.ValueKind == JsonValueKind.String
+                    && ulong.TryParse(property.Value.GetString(), out var parsed))
+                {
+                    manifestId = parsed;
+                }
+                else
+                {
+                    throw new FormatException($"Invalid manifest id for depot {depotId} in MID overrides file.");
+                }
+
+                result[depotId] = manifestId;
+            }
+
+            return result;
+        }
+
         internal static List<(uint depotId, ulong manifestId)> GetLuaBatchDepotManifestIds(DownloadConfig config)
         {
             if (config?.LuaKeyDepotIds != null && config.LuaKeyDepotIds.Count > 0)
@@ -502,11 +594,21 @@ namespace DepotDownloader
                     .OrderBy(depotId => depotId)
                     .Select(depotId =>
                     {
-                        var manifestId = !config.IgnoreLuaManifestIds
-                            && config.LuaManifestIds != null
-                            && config.LuaManifestIds.TryGetValue(depotId, out var luaManifestId)
-                                ? luaManifestId
-                                : ContentDownloader.INVALID_MANIFEST_ID;
+                        ulong manifestId;
+                        if (config.ManifestIdOverrides != null
+                            && config.ManifestIdOverrides.TryGetValue(depotId, out var overrideManifestId))
+                        {
+                            manifestId = overrideManifestId;
+                            Console.WriteLine("Using MID override for depot {0}: {1}.", depotId, manifestId);
+                        }
+                        else
+                        {
+                            manifestId = !config.IgnoreLuaManifestIds
+                                && config.LuaManifestIds != null
+                                && config.LuaManifestIds.TryGetValue(depotId, out var luaManifestId)
+                                    ? luaManifestId
+                                    : ContentDownloader.INVALID_MANIFEST_ID;
+                        }
 
                         return (depotId, manifestId);
                     })
@@ -723,6 +825,7 @@ namespace DepotDownloader
             Console.WriteLine("  -lua [file]              - a Lua file to load depot keys and manifest ids from.");
             Console.WriteLine("                             if file is omitted, uses <manifestdir>/<appid>.lua or ./<appid>/<appid>.lua when available.");
             Console.WriteLine("  -no-lua-mid             - ignore setManifestid entries from Lua files.");
+            Console.WriteLine("  -mid-overrides <file>    - JSON map of depot id to manifest id; if omitted with -lua, tries mid_overrides.json next to the Lua file.");
             Console.WriteLine("  -manifestfile <file>     - Use Specified Manifest file from Steam.");
             Console.WriteLine("  -manifestdir <dir>       - Use Steam manifest files from a directory by depot and manifest id.");
             Console.WriteLine("  -appmanifest             - Generate a minimal Steam appmanifest ACF metadata file.");
