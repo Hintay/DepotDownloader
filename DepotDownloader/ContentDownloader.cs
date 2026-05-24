@@ -1212,6 +1212,16 @@ namespace DepotDownloader
             return config?.UseManifestDirectory == true && !config.IgnoreLuaManifestIds;
         }
 
+        internal static string GetSkippedManifestDirectoryCacheMessage(uint depotId)
+        {
+            return string.Format("Skipping manifestdir manifest cache for depot {0} because -no-lua-mid is enabled.", depotId);
+        }
+
+        internal static string GetDownloadingManifestMessage(uint depotId, ulong manifestId)
+        {
+            return string.Format("Downloading depot {0} manifest {1} from Steam/CDN.", depotId, manifestId);
+        }
+
         private class DepotDownloadCounter
         {
             public ulong completeDownloadSize;
@@ -1404,7 +1414,12 @@ namespace DepotDownloader
                     Util.SaveManifestToFile(configDir, newManifest);
                 }
             }
-            else if (ShouldLoadNewManifestFromDirectory(Config))
+            else if (Config.UseManifestDirectory && Config.IgnoreLuaManifestIds)
+            {
+                (Config.JsonProgress ? Console.Error : Console.Out).WriteLine(GetSkippedManifestDirectoryCacheMessage(depot.DepotId));
+            }
+
+            if (newManifest == null && ShouldLoadNewManifestFromDirectory(Config))
             {
                 newManifest = Util.LoadManifestFromFile(Config.ManifestDirectory, depot.DepotId, depot.ManifestId, true);
 
@@ -1418,12 +1433,12 @@ namespace DepotDownloader
                     Util.SaveManifestToFile(configDir, newManifest);
                 }
             }
-            else if (lastManifestId == depot.ManifestId && oldManifest != null)
+            else if (newManifest == null && lastManifestId == depot.ManifestId && oldManifest != null)
             {
                 newManifest = oldManifest;
                 (Config.JsonProgress ? Console.Error : Console.Out).WriteLine("Already have manifest {0} for depot {1}.", depot.ManifestId, depot.DepotId);
             }
-            else
+            else if (newManifest == null)
             {
                 newManifest = Util.LoadManifestFromFile(configDir, depot.DepotId, depot.ManifestId, true);
 
@@ -1433,7 +1448,7 @@ namespace DepotDownloader
                 }
                 else
                 {
-                    (Config.JsonProgress ? Console.Error : Console.Out).WriteLine($"Downloading depot {depot.DepotId} manifest");
+                    (Config.JsonProgress ? Console.Error : Console.Out).WriteLine(GetDownloadingManifestMessage(depot.DepotId, depot.ManifestId));
 
                     ulong manifestRequestCode = 0;
                     var manifestRequestCodeExpiration = DateTime.MinValue;

@@ -101,6 +101,22 @@ namespace DepotDownloader.Tests
         }
 
         [Fact]
+        public void GetSkippedManifestDirectoryCacheMessage_IncludesDepotAndReason()
+        {
+            var message = ContentDownloader.GetSkippedManifestDirectoryCacheMessage(1817491u);
+
+            Assert.Equal("Skipping manifestdir manifest cache for depot 1817491 because -no-lua-mid is enabled.", message);
+        }
+
+        [Fact]
+        public void GetDownloadingManifestMessage_IncludesDepotAndManifest()
+        {
+            var message = ContentDownloader.GetDownloadingManifestMessage(1817491u, 2957411760343078601UL);
+
+            Assert.Equal("Downloading depot 1817491 manifest 2957411760343078601 from Steam/CDN.", message);
+        }
+
+        [Fact]
         public void GetLuaBatchDepotManifestIds_UsesAddAppIdKeyDepotsAndOnlyAppliesMatchingManifestIds()
         {
             var config = new DownloadConfig
