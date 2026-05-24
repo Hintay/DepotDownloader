@@ -172,6 +172,7 @@ namespace DepotDownloader
             ContentDownloader.Config.LuaKeyDepotIds = [];
             ContentDownloader.Config.LuaAppTokens = [];
             ContentDownloader.Config.LuaOwnedApps = [];
+            ContentDownloader.Config.LuaDeclaredApps = [];
             ContentDownloader.Config.IgnoreLuaManifestIds = HasParameter(args, "-no-lua-mid");
 
             ContentDownloader.Config.InstallDirectory = GetParameter<string>(args, "-dir");
@@ -255,6 +256,7 @@ namespace DepotDownloader
                     ContentDownloader.Config.LuaKeyDepotIds = luaDepotData.KeyDepotIds;
                     ContentDownloader.Config.LuaAppTokens = luaDepotData.AppTokens;
                     ContentDownloader.Config.LuaOwnedApps = luaDepotData.OwnedApps;
+                    ContentDownloader.Config.LuaDeclaredApps = luaDepotData.DeclaredApps;
 
                     Console.WriteLine("Using Lua file: '{0}'.", ContentDownloader.Config.LuaFile);
                 }

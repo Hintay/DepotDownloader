@@ -696,11 +696,11 @@ namespace DepotDownloader
                 }
 
                 var dlcCandidates = new List<uint>();
-                if (Config.BatchLuaDownload && Config.LuaOwnedApps != null)
+                if (Config.BatchLuaDownload && Config.LuaDeclaredApps != null)
                 {
                     var extended = GetSteam3AppSection(appId, EAppInfoSection.Extended);
                     dlcCandidates = AppSelectionPrompt.ComputeDlcCandidates(
-                        Config.LuaOwnedApps,
+                        Config.LuaDeclaredApps,
                         appId,
                         depots,
                         extended);
@@ -748,7 +748,7 @@ namespace DepotDownloader
                     && Ansi.CanUseInteractiveProgress
                     && !skipInteractivePrompts
                     && Config.BatchLuaDownload
-                    && Config.LuaOwnedApps != null)
+                    && Config.LuaDeclaredApps != null)
                 {
                     if (dlcCandidates.Count > 0)
                     {
@@ -771,9 +771,14 @@ namespace DepotDownloader
                                 // identify the owning DLC through depots.<id>.dlcappid.
                                 Config.LuaManifestIds?.Remove(dlcId);
                                 Config.LuaAppTokens?.Remove(dlcId);
-                                Config.LuaOwnedApps.Remove(dlcId);
+                                Config.LuaDeclaredApps.Remove(dlcId);
+                                var dlcAppDepots = KeyValue.Invalid;
+                                if (steam3.AppInfo.TryGetValue(dlcId, out var dlcAppInfo) && dlcAppInfo != null)
+                                {
+                                    dlcAppDepots = dlcAppInfo.KeyValues["depots"];
+                                }
                                 depotManifestIds.RemoveAll(entry =>
-                                    AppSelectionPrompt.DepotBelongsToDlc(entry.depotId, dlcId, depots));
+                                    AppSelectionPrompt.DepotBelongsToDlc(entry.depotId, dlcId, depots, dlcAppDepots));
                             }
                         }
                     }
@@ -887,6 +892,37 @@ namespace DepotDownloader
                     }).ToList();
                 }
 
+                var appDepotsByAppId = new Dictionary<uint, KeyValue>();
+                if (Config.BatchLuaDownload && !isUgc && Config.LuaDeclaredApps != null)
+                {
+                    var appInfoIds = Config.LuaDeclaredApps
+                        .Where(id => id != appId && !steam3.AppInfo.ContainsKey(id))
+                        .Distinct()
+                        .ToList();
+
+                    if (appInfoIds.Count > 0)
+                    {
+                        await steam3.RequestAppInfoMany(appInfoIds);
+                    }
+
+                    foreach (var luaAppId in Config.LuaDeclaredApps)
+                    {
+                        if (luaAppId == appId)
+                        {
+                            continue;
+                        }
+
+                        if (steam3.AppInfo.TryGetValue(luaAppId, out var appInfo) && appInfo != null)
+                        {
+                            var appDepots = appInfo.KeyValues["depots"];
+                            if (appDepots != KeyValue.Invalid)
+                            {
+                                appDepotsByAppId[luaAppId] = appDepots;
+                            }
+                        }
+                    }
+                }
+
                 // Extend platform filter to Lua-batch depots. Developer mode (explicit
                 // -depot but no Lua batch) is intentionally left alone — user named the
                 // depots, don't second-guess. Also skip when the user never opted into
@@ -897,25 +933,6 @@ namespace DepotDownloader
                     && (Config.HasExplicitPlatformArgs || platformPromptRan)
                     && (!Config.DownloadAllPlatforms || !Config.DownloadAllArchs || !Config.DownloadAllLanguages))
                 {
-                    // Identify Lua depots whose parent app PICS we don't yet have. For
-                    // depots in main app's PICS section, parent is main app (PICS loaded).
-                    // For depots not in main app's PICS, assume parent app id == depot id
-                    // (the single-depot DLC convention).
-                    var unknownParents = depotManifestIds
-                        .Select(entry => entry.depotId)
-                        .Where(id =>
-                        {
-                            if (depots == null) return true;  // shouldn't happen — defensive
-                            return depots[id.ToString()] == KeyValue.Invalid && !steam3.AppInfo.ContainsKey(id);
-                        })
-                        .Distinct()
-                        .ToList();
-
-                    if (unknownParents.Count > 0)
-                    {
-                        await steam3.RequestAppInfoMany(unknownParents);
-                    }
-
                     var resolvedOs = os ?? Util.GetSteamOS();
                     var resolvedArch = arch ?? Util.GetSteamArch();
                     var resolvedLanguage = language ?? "english";
@@ -923,26 +940,15 @@ namespace DepotDownloader
                     depotManifestIds = depotManifestIds.Where(entry =>
                     {
                         var depotId = entry.depotId;
-
-                        // Find this depot's PICS section: either main app's depots[id] or
-                        // a separate app's depots[id] (DLC convention: depot id == app id).
-                        KeyValue depotSection = KeyValue.Invalid;
-                        if (depots != null)
+                        if (!AppSelectionPrompt.TryResolveDepotOwnerAppId(
+                                depotId,
+                                appId,
+                                depots,
+                                appDepotsByAppId,
+                                out _,
+                                out var depotSection))
                         {
-                            depotSection = depots[depotId.ToString()];
-                        }
-                        if (depotSection == KeyValue.Invalid && steam3.AppInfo.TryGetValue(depotId, out var parentInfo) && parentInfo != null)
-                        {
-                            var parentDepots = parentInfo.KeyValues["depots"];
-                            if (parentDepots != KeyValue.Invalid)
-                            {
-                                depotSection = parentDepots[depotId.ToString()];
-                            }
-                        }
-
-                        if (depotSection == KeyValue.Invalid)
-                        {
-                            return true;  // No PICS info -> fail-open, keep.
+                            return true;
                         }
 
                         return AppSelectionPrompt.DepotMatchesPlatform(
@@ -957,7 +963,20 @@ namespace DepotDownloader
 
                 foreach (var (depotId, manifestId) in depotManifestIds)
                 {
-                    var info = await GetDepotInfo(depotId, appId, manifestId, branch);
+                    var ownerAppId = appId;
+                    if (Config.BatchLuaDownload && !isUgc && !AppSelectionPrompt.TryResolveDepotOwnerAppId(
+                            depotId,
+                            appId,
+                            depots,
+                            appDepotsByAppId,
+                            out ownerAppId,
+                            out _))
+                    {
+                        (Config.JsonProgress ? Console.Error : Console.Out).WriteLine("Skipping depot {0}: not found in app {1} or declared Lua DLC app depots.", depotId, appId);
+                        continue;
+                    }
+
+                    var info = await GetDepotInfo(depotId, ownerAppId, manifestId, branch);
                     if (info != null)
                     {
                         infos.Add(info);

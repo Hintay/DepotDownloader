@@ -18,6 +18,7 @@ namespace DepotDownloader
             public HashSet<uint> KeyDepotIds { get; } = [];
             public Dictionary<uint, ulong> AppTokens { get; } = [];
             public HashSet<uint> OwnedApps { get; } = [];
+            public HashSet<uint> DeclaredApps { get; } = [];
         }
 
         public static void AddAll(string[] values)
@@ -53,6 +54,10 @@ namespace DepotDownloader
                     {
                         depotKeysCache[appId] = StringToByteArray(depotKey);
                         data.KeyDepotIds.Add(appId);
+                    }
+                    else
+                    {
+                        data.DeclaredApps.Add(appId);
                     }
                 }
 

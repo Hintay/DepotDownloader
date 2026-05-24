@@ -177,6 +177,56 @@ namespace DepotDownloader
             depotManifestIds.RemoveAll(entry => deselectedMainDepots.Contains(entry.depotId));
         }
 
+        internal static bool TryResolveDepotOwnerAppId(
+            uint depotId,
+            uint mainAppId,
+            KeyValue mainAppDepots,
+            IReadOnlyDictionary<uint, KeyValue> appDepotsByAppId,
+            out uint ownerAppId,
+            out KeyValue depotSection)
+        {
+            ownerAppId = 0;
+            depotSection = KeyValue.Invalid;
+
+            var depotIdString = depotId.ToString();
+            if (mainAppDepots != null && mainAppDepots != KeyValue.Invalid)
+            {
+                var mainDepotSection = mainAppDepots[depotIdString];
+                if (mainDepotSection != KeyValue.Invalid)
+                {
+                    ownerAppId = mainAppId;
+                    depotSection = mainDepotSection;
+                    return true;
+                }
+            }
+
+            if (appDepotsByAppId == null)
+            {
+                return false;
+            }
+
+            foreach (var entry in appDepotsByAppId)
+            {
+                var appDepots = entry.Value;
+                if (appDepots == null || appDepots == KeyValue.Invalid)
+                {
+                    continue;
+                }
+
+                var candidateDepotSection = appDepots[depotIdString];
+                if (candidateDepotSection == KeyValue.Invalid)
+                {
+                    continue;
+                }
+
+                ownerAppId = entry.Key;
+                depotSection = candidateDepotSection;
+                return true;
+            }
+
+            return false;
+        }
+
         public static List<uint> ComputeDlcCandidates(
             IEnumerable<uint> luaOwnedAppIds,
             uint appId,
@@ -208,26 +258,32 @@ namespace DepotDownloader
             return result;
         }
 
-        internal static bool DepotBelongsToDlc(uint depotId, uint dlcAppId, KeyValue mainAppDepots)
+        internal static bool DepotBelongsToDlc(uint depotId, uint dlcAppId, KeyValue mainAppDepots, KeyValue dlcAppDepots = null)
         {
             if (depotId == dlcAppId)
             {
                 return true;
             }
 
-            if (mainAppDepots == null || mainAppDepots == KeyValue.Invalid)
+            if (mainAppDepots != null && mainAppDepots != KeyValue.Invalid)
+            {
+                var depotSection = mainAppDepots[depotId.ToString()];
+                if (depotSection != KeyValue.Invalid)
+                {
+                    var dlcAppIdKv = depotSection["dlcappid"];
+                    if (dlcAppIdKv != KeyValue.Invalid && dlcAppIdKv.AsUnsignedInteger() == dlcAppId)
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            if (dlcAppDepots == null || dlcAppDepots == KeyValue.Invalid)
             {
                 return false;
             }
 
-            var depotSection = mainAppDepots[depotId.ToString()];
-            if (depotSection == KeyValue.Invalid)
-            {
-                return false;
-            }
-
-            var dlcAppIdKv = depotSection["dlcappid"];
-            return dlcAppIdKv != KeyValue.Invalid && dlcAppIdKv.AsUnsignedInteger() == dlcAppId;
+            return dlcAppDepots[depotId.ToString()] != KeyValue.Invalid;
         }
 
         static bool HasDlcDepotMarker(uint appOrDepotId, KeyValue mainAppDepots)

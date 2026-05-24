@@ -31,6 +31,26 @@ namespace DepotDownloader.Tests
         }
 
         [Fact]
+        public void Lua_ThreeArgAddAppId_DoesNotCaptureDeclaredApp()
+        {
+            const string lua = "addappid(1817491, 1, \"deadbeef\")";
+
+            var data = DepotKeyStore.AddFromLua(lua);
+
+            Assert.DoesNotContain(1817491u, data.DeclaredApps);
+        }
+
+        [Fact]
+        public void Lua_OneArgAddAppId_CapturesDeclaredApp()
+        {
+            const string lua = "addappid(1817490)";
+
+            var data = DepotKeyStore.AddFromLua(lua);
+
+            Assert.Contains(1817490u, data.DeclaredApps);
+        }
+
+        [Fact]
         public void Lua_OneArgFollowedByThreeArg_CapturesOnceOwnedAppKeyRegistered()
         {
             const string lua = "addappid(940500)\naddappid(940500, 1, \"deadbeef\")";
@@ -267,6 +287,68 @@ namespace DepotDownloader.Tests
             AppSelectionPrompt.RemoveDeselectedMainDepots(depotManifestIds, deselectedMainDepots);
 
             Assert.Equal(new[] { 601151u, 601153u }, depotManifestIds.ConvertAll(entry => entry.depotId));
+        }
+
+        [Fact]
+        public void TryResolveDepotOwnerAppId_DlcDepotInDlcAppDepots_ReturnsDlcAppId()
+        {
+            var mainDepots = new KeyValue("depots");
+            mainDepots.Children.Add(BuildDepotKv("1721471"));
+
+            var dlcDepots = new KeyValue("depots");
+            dlcDepots.Children.Add(BuildDepotKv("1817491"));
+            var appDepotsByAppId = new Dictionary<uint, KeyValue>
+            {
+                [1817490u] = dlcDepots,
+            };
+
+            var resolved = AppSelectionPrompt.TryResolveDepotOwnerAppId(
+                depotId: 1817491u,
+                mainAppId: 1721470u,
+                mainAppDepots: mainDepots,
+                appDepotsByAppId: appDepotsByAppId,
+                out var ownerAppId,
+                out var depotSection);
+
+            Assert.True(resolved);
+            Assert.Equal(1817490u, ownerAppId);
+            Assert.Equal("1817491", depotSection.Name);
+        }
+
+        [Fact]
+        public void TryResolveDepotOwnerAppId_KeyedAppDeclarationWithoutDepot_ReturnsFalse()
+        {
+            var mainDepots = new KeyValue("depots");
+            mainDepots.Children.Add(BuildDepotKv("1721471"));
+
+            var resolved = AppSelectionPrompt.TryResolveDepotOwnerAppId(
+                depotId: 1721470u,
+                mainAppId: 1721470u,
+                mainAppDepots: mainDepots,
+                appDepotsByAppId: new Dictionary<uint, KeyValue>(),
+                out var ownerAppId,
+                out var depotSection);
+
+            Assert.False(resolved);
+            Assert.Equal(0u, ownerAppId);
+            Assert.Equal(KeyValue.Invalid, depotSection);
+        }
+
+        [Fact]
+        public void DepotBelongsToDlc_DlcDepotInDlcAppDepots_ReturnsTrue()
+        {
+            var mainDepots = new KeyValue("depots");
+            mainDepots.Children.Add(BuildDepotKv("1721471"));
+            var dlcDepots = new KeyValue("depots");
+            dlcDepots.Children.Add(BuildDepotKv("1817491"));
+
+            var result = AppSelectionPrompt.DepotBelongsToDlc(
+                depotId: 1817491u,
+                dlcAppId: 1817490u,
+                mainAppDepots: mainDepots,
+                dlcAppDepots: dlcDepots);
+
+            Assert.True(result);
         }
 
         [Fact]
