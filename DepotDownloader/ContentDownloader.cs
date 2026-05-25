@@ -1061,23 +1061,37 @@ namespace DepotDownloader
                 {
                     await DownloadSteam3Async(infos, depotsOk, depotsFailed).ConfigureAwait(false);
 
+                    var downloadSucceeded = depotsFailed.Count == 0 && depotsOk.Count > 0;
+
                     if (ShouldWriteAppManifest())
                     {
                         WriteAppManifest(appId, branch, language, infos, configPath, stateFlags: 4);
                     }
+
+                    if (downloadSucceeded && !Config.DownloadManifestOnly)
+                    {
+                        await SteamlessIntegration.TryRunAsync(
+                            Config.InstallDirectory,
+                            logLine: WritePostProcessLog).ConfigureAwait(false);
+                    }
+
+                    appSuccess = downloadSucceeded;
                 }
                 catch (OperationCanceledException)
                 {
                     (Config.JsonProgress ? Console.Error : Console.Out).WriteLine("App {0} was not completely downloaded.", appId);
                     throw;
                 }
-
-                appSuccess = depotsFailed.Count == 0 && depotsOk.Count > 0;
             }
             finally
             {
                 JsonProgressLogger.EmitAppDone(appSuccess, depotsOk, depotsFailed);
             }
+        }
+
+        static void WritePostProcessLog(string message)
+        {
+            (Config.JsonProgress ? Console.Error : Console.Out).WriteLine(message);
         }
 
         static async Task<DepotDownloadInfo> GetDepotInfo(uint depotId, uint appId, ulong manifestId, string branch)
