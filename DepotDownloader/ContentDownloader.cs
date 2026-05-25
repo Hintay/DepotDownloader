@@ -997,7 +997,11 @@ namespace DepotDownloader
                     foreach (var (depotId, manifestId) in infos.Select(d => (d.DepotId, d.ManifestId)))
                     {
                         installed.InstalledDepots.TryGetValue(depotId, out var recorded);
-                        (Config.JsonProgress ? Console.Error : Console.Out).WriteLine(GetInstalledManifestComparisonMessage(depotId, recorded, manifestId));
+                        if (ShouldLogInstalledManifestComparison(DebugLog.Enabled))
+                        {
+                            DebugLog.WriteLine(nameof(ContentDownloader), GetInstalledManifestComparisonMessage(depotId, recorded, manifestId));
+                        }
+
                         if (recorded != manifestId)
                         {
                             mismatched++;
@@ -1236,6 +1240,11 @@ namespace DepotDownloader
         internal static string GetInstalledManifestComparisonMessage(uint depotId, ulong installedManifestId, ulong targetManifestId)
         {
             return string.Format("Appmanifest comparison for depot {0}: installed manifest {1}, target manifest {2}.", depotId, installedManifestId, targetManifestId);
+        }
+
+        internal static bool ShouldLogInstalledManifestComparison(bool debugEnabled)
+        {
+            return debugEnabled;
         }
 
         internal static bool ShouldSkipFullyInstalledApp(

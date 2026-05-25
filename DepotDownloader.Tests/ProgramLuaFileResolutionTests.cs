@@ -190,6 +190,14 @@ namespace DepotDownloader.Tests
             Assert.Equal("Appmanifest comparison for depot 1817491: installed manifest 2957411760343078601, target manifest 2468627520310452088.", message);
         }
 
+        [Theory]
+        [InlineData(false, false)]
+        [InlineData(true, true)]
+        public void ShouldLogInstalledManifestComparison_OnlyWhenDebugEnabled(bool debugEnabled, bool expected)
+        {
+            Assert.Equal(expected, ContentDownloader.ShouldLogInstalledManifestComparison(debugEnabled));
+        }
+
         [Fact]
         public void ShouldSkipFullyInstalledApp_OldAppmanifestManifestAndNewSteamManifest_ReturnsFalse()
         {
