@@ -9,12 +9,14 @@ namespace DepotDownloader
 {
     static class ManifestRequestCodeProvider
     {
+        private const string GmrcUrl = "http://gmrc.wudrm.com/manifest/{0}";
+
         public static async Task<ulong> GetFromGmrcAsync(ulong manifestId)
         {
             try
             {
                 using var client = HttpClientFactory.CreateHttpClient();
-                var response = await client.GetStringAsync($"https://gmrc.wudrm.com/manifest/{manifestId}").ConfigureAwait(false);
+                var response = await client.GetStringAsync(string.Format(GmrcUrl, manifestId)).ConfigureAwait(false);
 
                 return TryParsePlainTextRequestCode(response, out var requestCode) ? requestCode : 0;
             }
