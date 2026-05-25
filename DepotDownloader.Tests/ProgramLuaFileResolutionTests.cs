@@ -46,6 +46,107 @@ namespace DepotDownloader.Tests
         }
 
         [Fact]
+        public void ResolveLuaFile_NoManifestDir_FallsBackToFlatAppIdLua()
+        {
+            const uint appId = 601150u;
+            var luaPath = Path.Combine(scratch, $"{appId}.lua");
+            File.WriteAllText(luaPath, "addappid(601150)");
+
+            var resolved = Program.ResolveLuaFile(appId, luaFile: null, useManifestDirectory: false, manifestDirectory: null);
+
+            Assert.Equal(luaPath, resolved);
+        }
+
+        [Fact]
+        public void ResolveLuaFile_NoManifestDir_PrefersNestedOverFlat()
+        {
+            const uint appId = 601150u;
+            var appDir = Path.Combine(scratch, appId.ToString());
+            Directory.CreateDirectory(appDir);
+            var nested = Path.Combine(appDir, $"{appId}.lua");
+            var flat = Path.Combine(scratch, $"{appId}.lua");
+            File.WriteAllText(nested, "addappid(601150)");
+            File.WriteAllText(flat, "addappid(601150)");
+
+            var resolved = Program.ResolveLuaFile(appId, luaFile: null, useManifestDirectory: false, manifestDirectory: null);
+
+            Assert.Equal(nested, resolved);
+        }
+
+        [Fact]
+        public void ResolveLuaFile_NoManifestDir_FallsBackToSingleLuaInCurrentDirectory()
+        {
+            const uint appId = 601150u;
+            var luaPath = Path.Combine(scratch, "somegame.lua");
+            File.WriteAllText(luaPath, "addappid(601150)");
+
+            var resolved = Program.ResolveLuaFile(appId, luaFile: null, useManifestDirectory: false, manifestDirectory: null);
+
+            Assert.Equal(luaPath, resolved);
+        }
+
+        [Fact]
+        public void ResolveLuaFile_NoManifestDir_MultipleLuaFilesReturnsNull()
+        {
+            const uint appId = 601150u;
+            File.WriteAllText(Path.Combine(scratch, "one.lua"), "addappid(1)");
+            File.WriteAllText(Path.Combine(scratch, "two.lua"), "addappid(2)");
+
+            var resolved = Program.ResolveLuaFile(appId, luaFile: null, useManifestDirectory: false, manifestDirectory: null);
+
+            Assert.Null(resolved);
+        }
+
+        [Fact]
+        public void ResolveLuaFile_NoManifestDir_PrefersFlatAppIdOverArbitrarySingleLua()
+        {
+            const uint appId = 601150u;
+            var flat = Path.Combine(scratch, $"{appId}.lua");
+            File.WriteAllText(flat, "addappid(601150)");
+            // Single other *.lua should NOT win because the named file matches first.
+            File.WriteAllText(Path.Combine(scratch, "somegame.lua"), "addappid(601150)");
+
+            var resolved = Program.ResolveLuaFile(appId, luaFile: null, useManifestDirectory: false, manifestDirectory: null);
+
+            Assert.Equal(flat, resolved);
+        }
+
+        [Fact]
+        public void ValidateLuaAppMatch_AppIdInOwnedApps_ReturnsNull()
+        {
+            var result = Program.ValidateLuaAppMatch(601150u, [601150u, 601151u]);
+
+            Assert.Null(result);
+        }
+
+        [Fact]
+        public void ValidateLuaAppMatch_AppIdNotInOwnedApps_ReturnsMismatchMessage()
+        {
+            var result = Program.ValidateLuaAppMatch(601150u, [999999u, 888888u]);
+
+            Assert.NotNull(result);
+            Assert.Contains("601150", result);
+            Assert.Contains("888888", result);
+            Assert.Contains("999999", result);
+        }
+
+        [Fact]
+        public void ValidateLuaAppMatch_EmptyOwnedApps_ReturnsNull()
+        {
+            var result = Program.ValidateLuaAppMatch(601150u, []);
+
+            Assert.Null(result);
+        }
+
+        [Fact]
+        public void ValidateLuaAppMatch_NullOwnedApps_ReturnsNull()
+        {
+            var result = Program.ValidateLuaAppMatch(601150u, null);
+
+            Assert.Null(result);
+        }
+
+        [Fact]
         public void ResolveMidOverridesFile_NoExplicitPath_UsesLuaDirectoryShortUnderscoreName()
         {
             var luaDir = Path.Combine(scratch, "1721470");

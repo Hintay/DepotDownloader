@@ -247,7 +247,7 @@ namespace DepotDownloader
 
                 if (string.IsNullOrWhiteSpace(ContentDownloader.Config.LuaFile))
                 {
-                    Console.WriteLine("Error: -lua requires a file path, a matching <appid>.lua in -manifestdir, or <appid>/<appid>.lua in the current directory.");
+                    Console.WriteLine("Error: -lua requires a file path, a matching <appid>.lua in -manifestdir, or <appid>/<appid>.lua / <appid>.lua / a single *.lua in the current directory.");
                     return 1;
                 }
 
@@ -255,6 +255,15 @@ namespace DepotDownloader
                 {
                     var lua = File.ReadAllText(ContentDownloader.Config.LuaFile);
                     var luaDepotData = DepotKeyStore.AddFromLua(lua, ContentDownloader.Config.IgnoreLuaManifestIds);
+
+                    var mismatch = ValidateLuaAppMatch(appId, luaDepotData.OwnedApps);
+                    if (mismatch != null)
+                    {
+                        Console.WriteLine(mismatch);
+                        Console.WriteLine("Refusing to proceed: contents would be downloaded into the -app folder but originate from a different app's Lua file.");
+                        return 1;
+                    }
+
                     ContentDownloader.Config.LuaManifestIds = luaDepotData.ManifestIds;
                     ContentDownloader.Config.LuaKeyDepotIds = luaDepotData.KeyDepotIds;
                     ContentDownloader.Config.LuaAppTokens = luaDepotData.AppTokens;
@@ -501,14 +510,57 @@ namespace DepotDownloader
                 return File.Exists(appLuaFile) ? appLuaFile : null;
             }
 
-            var appDirectory = Path.Combine(Directory.GetCurrentDirectory(), appId.ToString());
-            if (!Directory.Exists(appDirectory))
+            // CWD search order, most-specific first. Mismatch detection
+            // (ValidateLuaAppMatch) catches "single *.lua" pickups that
+            // happen to be for a different app.
+            var cwd = Directory.GetCurrentDirectory();
+
+            var nestedLuaFile = Path.Combine(cwd, appId.ToString(), appLuaFileName);
+            if (File.Exists(nestedLuaFile))
+            {
+                return nestedLuaFile;
+            }
+
+            var flatLuaFile = Path.Combine(cwd, appLuaFileName);
+            if (File.Exists(flatLuaFile))
+            {
+                return flatLuaFile;
+            }
+
+            try
+            {
+                var luaCandidates = Directory.GetFiles(cwd, "*.lua", SearchOption.TopDirectoryOnly);
+                if (luaCandidates.Length == 1)
+                {
+                    return luaCandidates[0];
+                }
+            }
+            catch
+            {
+                // Ignore enumeration errors (permission denied etc.) and fall through.
+            }
+
+            return null;
+        }
+
+        // Returns null when the lua's app declarations are consistent with the
+        // requested -app, or an error message describing the mismatch. An empty
+        // ownedApps set is treated as "no opinion" (e.g. a depot-keys-only lua),
+        // not a mismatch — those scripts simply don't declare a main app.
+        internal static string ValidateLuaAppMatch(uint appId, HashSet<uint> ownedApps)
+        {
+            if (ownedApps == null || ownedApps.Count == 0)
             {
                 return null;
             }
 
-            var currentDirectoryLuaFile = Path.Combine(appDirectory, appLuaFileName);
-            return File.Exists(currentDirectoryLuaFile) ? currentDirectoryLuaFile : null;
+            if (ownedApps.Contains(appId))
+            {
+                return null;
+            }
+
+            var declared = string.Join(", ", ownedApps.OrderBy(id => id));
+            return $"Error: -app {appId} does not match any addappid() entry in the Lua file (declared app ids: {declared}).";
         }
 
         internal static string ResolveMidOverridesFile(string explicitPath, string luaFile)
@@ -823,7 +875,9 @@ namespace DepotDownloader
             Console.WriteLine("  -V or --version          - print version and runtime.");
             Console.WriteLine("  -depotkeys <file>        - a list of depot keys to use ('depotID;hexKey' per line).");
             Console.WriteLine("  -lua [file]              - a Lua file to load depot keys and manifest ids from.");
-            Console.WriteLine("                             if file is omitted, uses <manifestdir>/<appid>.lua or ./<appid>/<appid>.lua when available.");
+            Console.WriteLine("                             if file is omitted, searches in this order: <manifestdir>/<appid>.lua,");
+            Console.WriteLine("                             ./<appid>/<appid>.lua, ./<appid>.lua, or a single ./*.lua in the current directory.");
+            Console.WriteLine("                             aborts when the resolved Lua file's addappid() ids do not include -app.");
             Console.WriteLine("  -no-lua-mid             - ignore setManifestid entries from Lua files.");
             Console.WriteLine("  -mid-overrides <file>    - JSON map of depot id to manifest id; if omitted with -lua, tries mid_overrides.json next to the Lua file.");
             Console.WriteLine("  -manifestfile <file>     - Use Specified Manifest file from Steam.");
