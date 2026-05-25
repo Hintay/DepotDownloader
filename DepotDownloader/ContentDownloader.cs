@@ -1068,14 +1068,25 @@ namespace DepotDownloader
                         WriteAppManifest(appId, branch, language, infos, configPath, stateFlags: 4);
                     }
 
+                    appSuccess = downloadSucceeded;
+
                     if (downloadSucceeded && !Config.DownloadManifestOnly)
                     {
-                        await SteamlessIntegration.TryRunAsync(
-                            Config.InstallDirectory,
-                            logLine: WritePostProcessLog).ConfigureAwait(false);
+                        try
+                        {
+                            await SteamlessIntegration.TryRunAsync(
+                                Config.InstallDirectory,
+                                logLine: WritePostProcessLog).ConfigureAwait(false);
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            throw;
+                        }
+                        catch (Exception ex)
+                        {
+                            WritePostProcessLog($"Steamless warning: post-download patch failed: {ex.Message}");
+                        }
                     }
-
-                    appSuccess = downloadSucceeded;
                 }
                 catch (OperationCanceledException)
                 {

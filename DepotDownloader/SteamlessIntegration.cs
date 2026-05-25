@@ -126,7 +126,13 @@ namespace DepotDownloader
             }
 
             var gameName = new DirectoryInfo(gameDirectory).Name;
-            return Directory.EnumerateFiles(gameDirectory, "*.exe", SearchOption.AllDirectories)
+            var options = new EnumerationOptions
+            {
+                RecurseSubdirectories = true,
+                IgnoreInaccessible = true,
+            };
+
+            return Directory.EnumerateFiles(gameDirectory, "*.exe", options)
                 .Where(IsCandidateExecutable)
                 .OrderByDescending(path => GetExecutablePriority(path, gameName))
                 .ThenBy(path => path, StringComparer.OrdinalIgnoreCase)
@@ -225,8 +231,21 @@ namespace DepotDownloader
         {
             var backupPath = GetAvailableBackupPath(originalExe);
             File.Move(originalExe, backupPath);
-            File.Move(patchedOutput, originalExe);
-            return backupPath;
+
+            try
+            {
+                File.Move(patchedOutput, originalExe);
+                return backupPath;
+            }
+            catch
+            {
+                if (!File.Exists(originalExe) && File.Exists(backupPath))
+                {
+                    File.Move(backupPath, originalExe);
+                }
+
+                throw;
+            }
         }
 
         static string GetAvailableBackupPath(string originalExe)
@@ -274,25 +293,34 @@ namespace DepotDownloader
             logLine ??= Console.WriteLine;
             runner ??= new DefaultSteamlessProcessRunner();
 
-            var location = ResolveSteamlessDirectory(baseDirectory, getEnvironmentVariable);
-            if (location == null)
+            try
             {
-                logLine("Steamless not found; skipping post-download patch.");
-                return new SteamlessSummary(false, null, 0, []);
+                var location = ResolveSteamlessDirectory(baseDirectory, getEnvironmentVariable);
+                if (location == null)
+                {
+                    logLine("Steamless not found; skipping post-download patch.");
+                    return new SteamlessSummary(false, null, 0, []);
+                }
+
+                var candidates = FindGameExecutables(gameDirectory);
+                logLine($"Steamless found at '{location.DirectoryPath}'. Candidate executables: {candidates.Count}.");
+
+                var results = new List<SteamlessPatchResult>(candidates.Count);
+                foreach (var candidate in candidates)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    results.Add(await ProcessExecutableAsync(location, candidate, runner, logLine, cancellationToken).ConfigureAwait(false));
+                }
+
+                LogSummary(results, logLine);
+                return new SteamlessSummary(true, location.DirectoryPath, candidates.Count, results);
             }
-
-            var candidates = FindGameExecutables(gameDirectory);
-            logLine($"Steamless found at '{location.DirectoryPath}'. Candidate executables: {candidates.Count}.");
-
-            var results = new List<SteamlessPatchResult>(candidates.Count);
-            foreach (var candidate in candidates)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                results.Add(await ProcessExecutableAsync(location, candidate, runner, logLine, cancellationToken).ConfigureAwait(false));
+                logLine($"Steamless warning: post-download patch failed: {ex.Message}");
+                var result = new SteamlessPatchResult(gameDirectory, SteamlessPatchStatus.Failed, ex.Message);
+                return new SteamlessSummary(false, null, 0, [result]);
             }
-
-            LogSummary(results, logLine);
-            return new SteamlessSummary(true, location.DirectoryPath, candidates.Count, results);
         }
 
         static async Task<SteamlessPatchResult> ProcessExecutableAsync(
@@ -327,7 +355,7 @@ namespace DepotDownloader
 
                 return new SteamlessPatchResult(executablePath, status, $"Steamless failed with exit code {processResult.ExitCode}.");
             }
-            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is InvalidOperationException || ex is System.ComponentModel.Win32Exception)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 return new SteamlessPatchResult(executablePath, SteamlessPatchStatus.Failed, ex.Message);
             }

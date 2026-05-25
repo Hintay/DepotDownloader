@@ -163,6 +163,21 @@ namespace DepotDownloader.Tests
         }
 
         [Fact]
+        public void ReplaceOriginalWithPatched_PatchedMoveFails_RestoresOriginal()
+        {
+            var gameDir = Path.Combine(scratch, "replace-rollback");
+            Directory.CreateDirectory(gameDir);
+            var original = Path.Combine(gameDir, "Game.exe");
+            var missingPatched = Path.Combine(gameDir, "Game.unpacked.exe");
+            File.WriteAllText(original, "original");
+
+            Assert.Throws<FileNotFoundException>(() => SteamlessIntegration.ReplaceOriginalWithPatched(original, missingPatched));
+
+            Assert.Equal("original", File.ReadAllText(original));
+            Assert.False(File.Exists(Path.Combine(gameDir, "Game.original.exe")));
+        }
+
+        [Fact]
         public void ClassifyProcessResult_ExitCodeZeroWithOutputPath_ReturnsPatched()
         {
             var status = SteamlessIntegration.ClassifyProcessResult(
@@ -269,6 +284,48 @@ namespace DepotDownloader.Tests
             Assert.Equal(SteamlessPatchStatus.NoDrmDetected, result.Status);
             Assert.Equal(originalBytes, File.ReadAllBytes(exe));
             Assert.False(File.Exists(Path.Combine(gameDir, "Game.original.exe")));
+        }
+
+        [Fact]
+        public async Task TryRunAsync_UnexpectedRunnerError_ReturnsFailedSummary()
+        {
+            var gameDir = Path.Combine(scratch, "runner-error-game");
+            var steamlessDir = Path.Combine(scratch, "steamless-runner-error");
+            Directory.CreateDirectory(gameDir);
+            CreateSteamlessDirectory(steamlessDir);
+            WriteSizedFile(Path.Combine(gameDir, "Game.exe"), 200 * 1024);
+            var logs = new List<string>();
+
+            var summary = await SteamlessIntegration.TryRunAsync(
+                gameDir,
+                runner: new FakeSteamlessRunner((target, log) => throw new NotSupportedException("boom")),
+                logLine: logs.Add,
+                baseDirectory: scratch,
+                getEnvironmentVariable: name => name == SteamlessIntegration.STEAMLESS_PATH_ENVIRONMENT_VARIABLE ? steamlessDir : null);
+
+            var result = Assert.Single(summary.Results);
+            Assert.Equal(SteamlessPatchStatus.Failed, result.Status);
+            Assert.Contains("boom", result.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains(logs, line => line.Contains("failed: 1", StringComparison.OrdinalIgnoreCase));
+        }
+
+        [Fact]
+        public async Task TryRunAsync_UnexpectedDiscoveryError_ReturnsFailedSummary()
+        {
+            var logs = new List<string>();
+
+            var summary = await SteamlessIntegration.TryRunAsync(
+                Path.Combine(scratch, "game"),
+                runner: new FakeSteamlessRunner((target, log) => new SteamlessProcessResult(0, "unused")),
+                logLine: logs.Add,
+                getEnvironmentVariable: _ => throw new InvalidOperationException("discovery failed"));
+
+            Assert.False(summary.SteamlessFound);
+            Assert.Equal(0, summary.CandidateCount);
+            var result = Assert.Single(summary.Results);
+            Assert.Equal(SteamlessPatchStatus.Failed, result.Status);
+            Assert.Contains("discovery failed", result.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains(logs, line => line.Contains("Steamless warning", StringComparison.OrdinalIgnoreCase));
         }
 
         sealed class FakeSteamlessRunner : ISteamlessProcessRunner
