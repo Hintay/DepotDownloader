@@ -277,7 +277,6 @@ class GlobalDownloadCounter
     int globalCompletedChunks;
     int globalTotalChunks;
     ulong diskBytesWritten;
-    long diskWriteTicks;
     bool useInteractiveOutput;
 
     ProgressTask progressTask;
@@ -289,6 +288,23 @@ class GlobalDownloadCounter
     int verifyDoneChunks;
     DateTime? verifyStartTime;
     DateTime? networkStartTime;
+
+    // Sliding window for Net / Disk rates. One bucket per second-since-
+    // networkStartTime, indexed by (sec % SpeedWindowSeconds). speedBucketSec
+    // disambiguates fresh data from carry-over after the ring wraps; -1 means
+    // the slot has never been written.
+    const int SpeedWindowSeconds = 5;
+    readonly long[] speedBucketSec;
+    readonly ulong[] speedBucketNet;
+    readonly ulong[] speedBucketDisk;
+
+    public GlobalDownloadCounter()
+    {
+        speedBucketSec = new long[SpeedWindowSeconds];
+        speedBucketNet = new ulong[SpeedWindowSeconds];
+        speedBucketDisk = new ulong[SpeedWindowSeconds];
+        Array.Fill(speedBucketSec, -1L);
+    }
 
     public void Begin(ulong totalSize, bool useInteractiveProgress)
     {
@@ -487,18 +503,21 @@ class GlobalDownloadCounter
         }
     }
 
-    public void AddCompletedChunk(ulong bytes, ulong diskBytes, TimeSpan diskElapsed)
+    public void AddCompletedChunk(ulong uncompressedBytes, ulong compressedBytes, ulong diskBytes)
     {
         lock (this)
         {
-            networkStartTime ??= DateTime.UtcNow;
+            var now = DateTime.UtcNow;
+            networkStartTime ??= now;
             globalCompletedChunks++;
+            totalBytesCompressed += compressedBytes;
+            totalBytesUncompressed += uncompressedBytes;
             diskBytesWritten += diskBytes;
-            diskWriteTicks += diskElapsed.Ticks;
+            RecordSpeedSample((long)(now - networkStartTime.Value).TotalSeconds, compressedBytes, diskBytes);
 
-            if (completeDownloadSize >= bytes)
+            if (completeDownloadSize >= uncompressedBytes)
             {
-                completeDownloadSize -= bytes;
+                completeDownloadSize -= uncompressedBytes;
             }
             else
             {
@@ -507,6 +526,67 @@ class GlobalDownloadCounter
 
             UpdateProgressDisplay();
         }
+    }
+
+    void RecordSpeedSample(long sec, ulong compressedBytes, ulong diskBytes)
+    {
+        var idx = (int)(sec % SpeedWindowSeconds);
+        if (speedBucketSec[idx] != sec)
+        {
+            speedBucketSec[idx] = sec;
+            speedBucketNet[idx] = 0;
+            speedBucketDisk[idx] = 0;
+        }
+        speedBucketNet[idx] += compressedBytes;
+        speedBucketDisk[idx] += diskBytes;
+    }
+
+    (double NetBytesPerSecond, double DiskBytesPerSecond) ComputeRollingSpeeds()
+    {
+        if (!networkStartTime.HasValue)
+        {
+            return (0, 0);
+        }
+
+        var elapsed = (DateTime.UtcNow - networkStartTime.Value).TotalSeconds;
+        if (elapsed <= 0)
+        {
+            return (0, 0);
+        }
+
+        var nowSec = (long)elapsed;
+        var windowStart = nowSec - SpeedWindowSeconds + 1;
+
+        ulong netSum = 0;
+        ulong diskSum = 0;
+        var oldestSec = long.MaxValue;
+        for (var i = 0; i < SpeedWindowSeconds; i++)
+        {
+            var s = speedBucketSec[i];
+            if (s < 0 || s < windowStart || s > nowSec)
+            {
+                continue;
+            }
+            netSum += speedBucketNet[i];
+            diskSum += speedBucketDisk[i];
+            if (s < oldestSec)
+            {
+                oldestSec = s;
+            }
+        }
+
+        if (oldestSec == long.MaxValue)
+        {
+            return (0, 0);
+        }
+
+        // Effective span: from the start of the oldest in-window bucket to now.
+        // Prevents start-of-window underestimation (only 1 partial bucket
+        // populated shouldn't divide by the full 5s) and end-of-window
+        // overshoot (the latest bucket is a partial second, but we include the
+        // fractional now-time in the denominator to match).
+        var effectiveSeconds = Math.Max(0.001, elapsed - oldestSec);
+        return (netSum / effectiveSeconds, diskSum / effectiveSeconds);
     }
 
     public void Finish()
@@ -560,19 +640,7 @@ class GlobalDownloadCounter
             return currentDepotId == 0 ? "Preparing" : $"Depot {currentDepotId}";
         }
 
-        double bytesPerSecond = 0;
-        if (networkStartTime.HasValue)
-        {
-            var elapsed = DateTime.UtcNow - networkStartTime.Value;
-            if (elapsed.TotalSeconds > 0)
-            {
-                bytesPerSecond = totalBytesUncompressed / elapsed.TotalSeconds;
-            }
-        }
-
-        var diskElapsed = TimeSpan.FromTicks(diskWriteTicks);
-        var diskBytesPerSecond = diskElapsed.TotalSeconds > 0 ? diskBytesWritten / diskElapsed.TotalSeconds : 0;
-
-        return $"Depot {currentDepotId} | C {globalCompletedChunks}/{globalTotalChunks} | Net {Ansi.FormatBytes(bytesPerSecond)}/s | Disk {Ansi.FormatBytes(diskBytesPerSecond)}/s";
+        var (netBytesPerSecond, diskBytesPerSecond) = ComputeRollingSpeeds();
+        return $"Depot {currentDepotId} | C {globalCompletedChunks}/{globalTotalChunks} | Net {Ansi.FormatBytes(netBytesPerSecond)}/s | Disk {Ansi.FormatBytes(diskBytesPerSecond)}/s";
     }
 }

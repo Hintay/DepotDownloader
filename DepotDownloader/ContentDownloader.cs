@@ -2138,7 +2138,6 @@ namespace DepotDownloader
 
             var written = 0;
             var chunkBuffer = ArrayPool<byte>.Shared.Rent((int)chunk.UncompressedLength);
-            var diskStopwatch = new Stopwatch();
 
             try
             {
@@ -2232,10 +2231,8 @@ namespace DepotDownloader
                         fileStreamData.fileStream = File.Open(fileFinalPath, FileMode.Open);
                     }
 
-                    diskStopwatch.Start();
                     fileStreamData.fileStream.Seek((long)chunk.Offset, SeekOrigin.Begin);
                     await fileStreamData.fileStream.WriteAsync(chunkBuffer.AsMemory(0, written), cts.Token);
-                    diskStopwatch.Stop();
                 }
                 finally
                 {
@@ -2266,14 +2263,8 @@ namespace DepotDownloader
                 depotTotalSize = depotDownloadCounter.completeDownloadSize;
             }
 
-            lock (downloadCounter)
-            {
-                downloadCounter.totalBytesCompressed += chunk.CompressedLength;
-                downloadCounter.totalBytesUncompressed += chunk.UncompressedLength;
-            }
-
             depotFilesData.resumeStateStore?.MarkChunkCompleted(file, chunk, downloadCounter);
-            downloadCounter.AddCompletedChunk(chunk.UncompressedLength, (ulong)written, diskStopwatch.Elapsed);
+            downloadCounter.AddCompletedChunk(chunk.UncompressedLength, chunk.CompressedLength, (ulong)written);
 
             // Emit a per-depot progress event. The logger throttles to <= 4/sec
             // per depot, so calling on every chunk credit is safe.

@@ -128,15 +128,15 @@ namespace DepotDownloader.Tests
             counter.RegisterDepotChunks(completedChunks: 0, totalChunks: 6);
 
             // Two chunks done
-            counter.AddCompletedChunk(bytes: 10, diskBytes: 10, diskElapsed: System.TimeSpan.Zero);
-            counter.AddCompletedChunk(bytes: 10, diskBytes: 10, diskElapsed: System.TimeSpan.Zero);
+            counter.AddCompletedChunk(uncompressedBytes: 10, compressedBytes: 5, diskBytes: 10);
+            counter.AddCompletedChunk(uncompressedBytes: 10, compressedBytes: 5, diskBytes: 10);
 
             // Second depot starts: 3 already validated + 10 total
             counter.SetCurrentDepot(941952);
             counter.RegisterDepotChunks(completedChunks: 3, totalChunks: 10);
 
             // One more chunk
-            counter.AddCompletedChunk(bytes: 10, diskBytes: 10, diskElapsed: System.TimeSpan.Zero);
+            counter.AddCompletedChunk(uncompressedBytes: 10, compressedBytes: 5, diskBytes: 10);
 
             var desc = counter.BuildProgressDescription();
             // 2 (depot 1 chunks) + 3 (depot 2 validated) + 1 (depot 2 new) = 6
