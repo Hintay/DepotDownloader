@@ -36,10 +36,26 @@ static class Ansi
     internal static int progressDepth;
     internal static readonly ConcurrentQueue<string> deferredOutput = new();
 
+    // Bounded ring of recent log lines, rendered above the progress bar inside
+    // Spectre's live region. Capping keeps LiveRenderable._shape from exceeding
+    // viewport (either dimension) — a shape overflow triggers Spectre's
+    // EraseInDisplay(2) + ClearScrollback() reset path inside PositionCursor,
+    // which wipes terminal history AND leaves _shape null on the next render,
+    // breaking cursor positioning until enough frames pass to restabilize.
+    private static readonly object progressRenderLock = new();
+    private static readonly LinkedList<string> progressLogLines = new();
+    private static readonly StringBuilder progressLogFragment = new();
+    // Floor of 3, ceiling of 25, otherwise leave a 6-line headroom for the
+    // progress + verify task lines + Padder padding + Spectre's own cursor.
+    private const int MinProgressLogLines = 3;
+    private const int MaxProgressLogLines = 25;
+    private const int ProgressLogHeadroom = 6;
+
     internal static void ResetForTests()
     {
         progressDepth = 0;
         while (deferredOutput.TryDequeue(out _)) { }
+        ClearProgressRenderState();
     }
 
     public static bool CanUseInteractiveProgress => !Console.IsInputRedirected && !Console.IsOutputRedirected;
@@ -174,54 +190,109 @@ static class Ansi
     }
 
     // Spectre.Console.Progress invokes this hook from inside
-    // DefaultProgressRenderer.Update for every refresh tick. We drain the
-    // queued log lines and write them through AnsiConsole — pipeline-routed
-    // writes hit DefaultProgressRenderer.Process which emits
-    // PositionCursor + text + _live, so the text scrolls into terminal
-    // scrollback above the bar while the live region stays a fixed-size
-    // renderable. Returning the unchanged progress renderable means
-    // LiveRenderable._shape no longer inflates per accumulated log line.
+    // DefaultProgressRenderer.Update for every refresh tick. We move queued
+    // log fragments into a capped ring and render them as rows above the bar.
+    // The cap is derived from Console.WindowHeight so the resulting live
+    // region's total height never exceeds the viewport — exceeding it triggers
+    // Spectre's LiveRenderable.PositionCursor reset path, which calls
+    // EraseInDisplay(2) + ClearScrollback() and corrupts the bar afterwards.
     private static IRenderable RenderProgressWithLogs(IRenderable progressRenderable, IReadOnlyList<ProgressTask> tasks)
     {
-        if (deferredOutput.IsEmpty)
+        lock (progressRenderLock)
         {
-            return progressRenderable;
-        }
+            DrainDeferredOutputToProgressRows();
 
-        var sb = new StringBuilder();
-        while (deferredOutput.TryDequeue(out var text))
-        {
-            sb.Append(text);
-        }
+            var cap = ComputeLogCap(tasks?.Count ?? 0);
+            while (progressLogLines.Count > cap)
+            {
+                progressLogLines.RemoveFirst();
+            }
 
-        if (sb.Length == 0)
-        {
-            return progressRenderable;
-        }
+            if (progressLogLines.Count == 0 && progressLogFragment.Length == 0)
+            {
+                return progressRenderable;
+            }
 
+            var rows = new List<IRenderable>(progressLogLines.Count + 2);
+            foreach (var line in progressLogLines)
+            {
+                rows.Add(new Text(line));
+            }
+
+            if (progressLogFragment.Length > 0)
+            {
+                rows.Add(new Text(progressLogFragment.ToString()));
+            }
+
+            rows.Add(progressRenderable);
+            return new Rows(rows);
+        }
+    }
+
+    private static int ComputeLogCap(int taskCount)
+    {
+        int height;
         try
         {
-            if (useProgress)
-            {
-                AnsiConsole.Write(sb.ToString());
-            }
-            else
-            {
-                Console.Write(sb.ToString());
-            }
+            height = Console.WindowHeight;
         }
         catch
         {
-            // Render hook runs on Spectre's refresh thread; an exception here
-            // would tear the thread down and freeze the bar. Items have
-            // already been dequeued — drop them rather than risk a hang.
+            // No attached console (CI / redirected). Fall back to a small cap.
+            return MinProgressLogLines;
         }
 
-        return progressRenderable;
+        // Bar consumes Padder(top=1) + tasks + Padder(bottom=1) lines.
+        var barLines = Math.Max(1, taskCount) + 2;
+        var available = height - barLines - ProgressLogHeadroom;
+        if (available < MinProgressLogLines)
+        {
+            return MinProgressLogLines;
+        }
+
+        return Math.Min(MaxProgressLogLines, available);
+    }
+
+    private static void DrainDeferredOutputToProgressRows()
+    {
+        while (deferredOutput.TryDequeue(out var text))
+        {
+            AppendProgressText(text);
+        }
+    }
+
+    private static void AppendProgressText(string text)
+    {
+        foreach (var ch in text)
+        {
+            if (ch == '\r')
+            {
+                continue;
+            }
+
+            if (ch == '\n')
+            {
+                progressLogLines.AddLast(progressLogFragment.ToString());
+                progressLogFragment.Clear();
+                continue;
+            }
+
+            progressLogFragment.Append(ch);
+        }
+    }
+
+    private static void ClearProgressRenderState()
+    {
+        lock (progressRenderLock)
+        {
+            progressLogLines.Clear();
+            progressLogFragment.Clear();
+        }
     }
 
     public static async Task RunWithProgressAsync(GlobalDownloadCounter counter, Func<Task> action)
     {
+        ClearProgressRenderState();
         Interlocked.Increment(ref progressDepth);
 
         try
@@ -260,6 +331,7 @@ static class Ansi
             if (Interlocked.Decrement(ref progressDepth) == 0)
             {
                 DrainBatch();
+                ClearProgressRenderState();
             }
         }
     }
