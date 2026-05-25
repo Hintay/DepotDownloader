@@ -2,8 +2,8 @@
 // in file 'LICENSE', which is part of this source code package.
 
 using System;
-using System.Collections.Generic;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -31,19 +31,15 @@ static class Ansi
     private static bool useProgress;
 
     // Internal for tests: queue of pending writes during an active Progress.
-    // Drained by Spectre.Console.Progress' render hook so external writes never
-    // compete with Spectre's render loop while file logs remain visible.
+    // Drained from the Spectre.Console.Progress render hook so external writes
+    // never compete with Spectre's render loop while file logs remain visible.
     internal static int progressDepth;
     internal static readonly ConcurrentQueue<string> deferredOutput = new();
-    private static readonly object progressRenderLock = new();
-    private static readonly List<string> progressLogLines = [];
-    private static readonly StringBuilder progressLogFragment = new();
 
     internal static void ResetForTests()
     {
         progressDepth = 0;
         while (deferredOutput.TryDequeue(out _)) { }
-        ClearProgressRenderState();
     }
 
     public static bool CanUseInteractiveProgress => !Console.IsInputRedirected && !Console.IsOutputRedirected;
@@ -177,73 +173,55 @@ static class Ansi
         }
     }
 
+    // Spectre.Console.Progress invokes this hook from inside
+    // DefaultProgressRenderer.Update for every refresh tick. We drain the
+    // queued log lines and write them through AnsiConsole — pipeline-routed
+    // writes hit DefaultProgressRenderer.Process which emits
+    // PositionCursor + text + _live, so the text scrolls into terminal
+    // scrollback above the bar while the live region stays a fixed-size
+    // renderable. Returning the unchanged progress renderable means
+    // LiveRenderable._shape no longer inflates per accumulated log line.
     private static IRenderable RenderProgressWithLogs(IRenderable progressRenderable, IReadOnlyList<ProgressTask> tasks)
     {
-        lock (progressRenderLock)
+        if (deferredOutput.IsEmpty)
         {
-            DrainDeferredOutputToProgressRows();
-
-            if (progressLogLines.Count == 0 && progressLogFragment.Length == 0)
-            {
-                return progressRenderable;
-            }
-
-            var rows = new List<IRenderable>(progressLogLines.Count + 2);
-            foreach (var line in progressLogLines)
-            {
-                rows.Add(new Text(line));
-            }
-
-            if (progressLogFragment.Length > 0)
-            {
-                rows.Add(new Text(progressLogFragment.ToString()));
-            }
-
-            rows.Add(progressRenderable);
-            return new Rows(rows);
+            return progressRenderable;
         }
-    }
 
-    private static void DrainDeferredOutputToProgressRows()
-    {
+        var sb = new StringBuilder();
         while (deferredOutput.TryDequeue(out var text))
         {
-            AppendProgressText(text);
+            sb.Append(text);
         }
-    }
 
-    private static void AppendProgressText(string text)
-    {
-        foreach (var ch in text)
+        if (sb.Length == 0)
         {
-            if (ch == '\r')
-            {
-                continue;
-            }
-
-            if (ch == '\n')
-            {
-                progressLogLines.Add(progressLogFragment.ToString());
-                progressLogFragment.Clear();
-                continue;
-            }
-
-            progressLogFragment.Append(ch);
+            return progressRenderable;
         }
-    }
 
-    private static void ClearProgressRenderState()
-    {
-        lock (progressRenderLock)
+        try
         {
-            progressLogLines.Clear();
-            progressLogFragment.Clear();
+            if (useProgress)
+            {
+                AnsiConsole.Write(sb.ToString());
+            }
+            else
+            {
+                Console.Write(sb.ToString());
+            }
         }
+        catch
+        {
+            // Render hook runs on Spectre's refresh thread; an exception here
+            // would tear the thread down and freeze the bar. Items have
+            // already been dequeued — drop them rather than risk a hang.
+        }
+
+        return progressRenderable;
     }
 
     public static async Task RunWithProgressAsync(GlobalDownloadCounter counter, Func<Task> action)
     {
-        ClearProgressRenderState();
         Interlocked.Increment(ref progressDepth);
 
         try
@@ -282,7 +260,6 @@ static class Ansi
             if (Interlocked.Decrement(ref progressDepth) == 0)
             {
                 DrainBatch();
-                ClearProgressRenderState();
             }
         }
     }
