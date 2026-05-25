@@ -2,7 +2,10 @@
 // in file 'LICENSE', which is part of this source code package.
 
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Threading;
+using System.Threading.Tasks;
 using DepotDownloader;
 using Xunit;
 
@@ -187,6 +190,105 @@ namespace DepotDownloader.Tests
                 patchedOutputPath: null);
 
             Assert.Equal(SteamlessPatchStatus.Failed, status);
+        }
+
+        [Fact]
+        public async Task TryRunAsync_MissingSteamless_ReturnsSkippedSummary()
+        {
+            var gameDir = Path.Combine(scratch, "missing-steamless-game");
+            Directory.CreateDirectory(gameDir);
+            WriteSizedFile(Path.Combine(gameDir, "Game.exe"), 200 * 1024);
+            var logs = new List<string>();
+
+            var summary = await SteamlessIntegration.TryRunAsync(
+                gameDir,
+                runner: new FakeSteamlessRunner((target, log) => new SteamlessProcessResult(0, "unused")),
+                logLine: logs.Add,
+                baseDirectory: Path.Combine(scratch, "base"),
+                getEnvironmentVariable: _ => null);
+
+            Assert.False(summary.SteamlessFound);
+            Assert.Equal(0, summary.CandidateCount);
+            Assert.Empty(summary.Results);
+            Assert.Contains(logs, line => line.Contains("Steamless not found", StringComparison.OrdinalIgnoreCase));
+        }
+
+        [Fact]
+        public async Task TryRunAsync_PatchedOutput_ReplacesOriginalAndSummarizesPatched()
+        {
+            var gameDir = Path.Combine(scratch, "patched-game");
+            var steamlessDir = Path.Combine(scratch, "steamless");
+            Directory.CreateDirectory(gameDir);
+            CreateSteamlessDirectory(steamlessDir);
+            var exe = Path.Combine(gameDir, "Game.exe");
+            WriteSizedFile(exe, 200 * 1024);
+
+            var runner = new FakeSteamlessRunner((target, log) =>
+            {
+                File.WriteAllText(Path.Combine(Path.GetDirectoryName(target), "Game.unpacked.exe"), "patched");
+                log("runner output");
+                return new SteamlessProcessResult(0, "Successfully unpacked file!");
+            });
+            var logs = new List<string>();
+
+            var summary = await SteamlessIntegration.TryRunAsync(
+                gameDir,
+                runner,
+                logs.Add,
+                baseDirectory: scratch,
+                getEnvironmentVariable: name => name == SteamlessIntegration.STEAMLESS_PATH_ENVIRONMENT_VARIABLE ? steamlessDir : null);
+
+            var result = Assert.Single(summary.Results);
+            Assert.True(summary.SteamlessFound);
+            Assert.Equal(SteamlessPatchStatus.Patched, result.Status);
+            Assert.True(File.Exists(Path.Combine(gameDir, "Game.original.exe")));
+            Assert.Equal("patched", File.ReadAllText(exe));
+            Assert.Contains(logs, line => line.Contains("runner output", StringComparison.OrdinalIgnoreCase));
+            Assert.Contains(logs, line => line.Contains("patched: 1", StringComparison.OrdinalIgnoreCase));
+        }
+
+        [Fact]
+        public async Task TryRunAsync_NoDrmOutput_DoesNotReplaceOriginal()
+        {
+            var gameDir = Path.Combine(scratch, "nodrm-game");
+            var steamlessDir = Path.Combine(scratch, "steamless-nodrm");
+            Directory.CreateDirectory(gameDir);
+            CreateSteamlessDirectory(steamlessDir);
+            var exe = Path.Combine(gameDir, "Game.exe");
+            WriteSizedFile(exe, 200 * 1024);
+            var originalBytes = File.ReadAllBytes(exe);
+
+            var summary = await SteamlessIntegration.TryRunAsync(
+                gameDir,
+                runner: new FakeSteamlessRunner((target, log) => new SteamlessProcessResult(1, "All unpackers failed to unpack file.")),
+                logLine: _ => { },
+                baseDirectory: scratch,
+                getEnvironmentVariable: name => name == SteamlessIntegration.STEAMLESS_PATH_ENVIRONMENT_VARIABLE ? steamlessDir : null);
+
+            var result = Assert.Single(summary.Results);
+            Assert.Equal(SteamlessPatchStatus.NoDrmDetected, result.Status);
+            Assert.Equal(originalBytes, File.ReadAllBytes(exe));
+            Assert.False(File.Exists(Path.Combine(gameDir, "Game.original.exe")));
+        }
+
+        sealed class FakeSteamlessRunner : ISteamlessProcessRunner
+        {
+            readonly Func<string, Action<string>, SteamlessProcessResult> run;
+
+            public FakeSteamlessRunner(Func<string, Action<string>, SteamlessProcessResult> run)
+            {
+                this.run = run;
+            }
+
+            public Task<SteamlessProcessResult> RunAsync(
+                string steamlessExe,
+                string steamlessDirectory,
+                string targetExe,
+                Action<string> logLine,
+                CancellationToken cancellationToken = default)
+            {
+                return Task.FromResult(run(targetExe, logLine));
+            }
         }
 
         static void CreateSteamlessDirectory(string path)

@@ -263,6 +263,90 @@ namespace DepotDownloader
                 : SteamlessPatchStatus.Failed;
         }
 
+        public static async Task<SteamlessSummary> TryRunAsync(
+            string gameDirectory,
+            ISteamlessProcessRunner runner = null,
+            Action<string> logLine = null,
+            string baseDirectory = null,
+            Func<string, string> getEnvironmentVariable = null,
+            CancellationToken cancellationToken = default)
+        {
+            logLine ??= Console.WriteLine;
+            runner ??= new DefaultSteamlessProcessRunner();
+
+            var location = ResolveSteamlessDirectory(baseDirectory, getEnvironmentVariable);
+            if (location == null)
+            {
+                logLine("Steamless not found; skipping post-download patch.");
+                return new SteamlessSummary(false, null, 0, []);
+            }
+
+            var candidates = FindGameExecutables(gameDirectory);
+            logLine($"Steamless found at '{location.DirectoryPath}'. Candidate executables: {candidates.Count}.");
+
+            var results = new List<SteamlessPatchResult>(candidates.Count);
+            foreach (var candidate in candidates)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                results.Add(await ProcessExecutableAsync(location, candidate, runner, logLine, cancellationToken).ConfigureAwait(false));
+            }
+
+            LogSummary(results, logLine);
+            return new SteamlessSummary(true, location.DirectoryPath, candidates.Count, results);
+        }
+
+        static async Task<SteamlessPatchResult> ProcessExecutableAsync(
+            SteamlessLocation location,
+            string executablePath,
+            ISteamlessProcessRunner runner,
+            Action<string> logLine,
+            CancellationToken cancellationToken)
+        {
+            try
+            {
+                logLine($"Running Steamless on '{executablePath}'.");
+                var processResult = await runner.RunAsync(
+                    location.ExecutablePath,
+                    location.DirectoryPath,
+                    executablePath,
+                    line => logLine("[Steamless] " + line),
+                    cancellationToken).ConfigureAwait(false);
+
+                var patchedOutput = ResolvePatchedOutputPath(executablePath);
+                var status = ClassifyProcessResult(processResult, patchedOutput);
+                if (status == SteamlessPatchStatus.Patched)
+                {
+                    var backup = ReplaceOriginalWithPatched(executablePath, patchedOutput);
+                    return new SteamlessPatchResult(executablePath, status, $"Patched; backup written to '{backup}'.");
+                }
+
+                if (status == SteamlessPatchStatus.NoDrmDetected)
+                {
+                    return new SteamlessPatchResult(executablePath, status, "No Steam DRM detected or no supported unpacker matched.");
+                }
+
+                return new SteamlessPatchResult(executablePath, status, $"Steamless failed with exit code {processResult.ExitCode}.");
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is InvalidOperationException || ex is System.ComponentModel.Win32Exception)
+            {
+                return new SteamlessPatchResult(executablePath, SteamlessPatchStatus.Failed, ex.Message);
+            }
+        }
+
+        static void LogSummary(IReadOnlyList<SteamlessPatchResult> results, Action<string> logLine)
+        {
+            var patched = results.Count(result => result.Status == SteamlessPatchStatus.Patched);
+            var noDrm = results.Count(result => result.Status == SteamlessPatchStatus.NoDrmDetected);
+            var failed = results.Count(result => result.Status == SteamlessPatchStatus.Failed);
+            var skipped = results.Count(result => result.Status == SteamlessPatchStatus.Skipped);
+
+            logLine($"Steamless summary: patched: {patched}, no DRM: {noDrm}, failed: {failed}, skipped: {skipped}.");
+            foreach (var result in results.Where(result => result.Status == SteamlessPatchStatus.Failed))
+            {
+                logLine($"Steamless warning for '{result.ExecutablePath}': {result.Message}");
+            }
+        }
+
         static bool LooksLikeNoDrm(string output)
         {
             if (string.IsNullOrWhiteSpace(output))
@@ -272,6 +356,60 @@ namespace DepotDownloader
 
             return output.Contains("All unpackers failed to unpack file", StringComparison.OrdinalIgnoreCase)
                 || output.Contains("Failed to unpack file", StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    internal sealed class DefaultSteamlessProcessRunner : ISteamlessProcessRunner
+    {
+        public async Task<SteamlessProcessResult> RunAsync(
+            string steamlessExe,
+            string steamlessDirectory,
+            string targetExe,
+            Action<string> logLine,
+            CancellationToken cancellationToken = default)
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = steamlessExe,
+                WorkingDirectory = steamlessDirectory,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+            };
+
+            startInfo.ArgumentList.Add("--quiet");
+            startInfo.ArgumentList.Add("--realign");
+            startInfo.ArgumentList.Add("--recalcchecksum");
+            startInfo.ArgumentList.Add(targetExe);
+
+            using var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
+            var output = new List<string>();
+
+            process.OutputDataReceived += (_, args) => CaptureLine(args.Data, output, logLine);
+            process.ErrorDataReceived += (_, args) => CaptureLine(args.Data, output, logLine);
+
+            process.Start();
+            process.BeginOutputReadLine();
+            process.BeginErrorReadLine();
+            await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+
+            return new SteamlessProcessResult(process.ExitCode, string.Join(Environment.NewLine, output));
+        }
+
+        static void CaptureLine(string line, List<string> output, Action<string> logLine)
+        {
+            if (string.IsNullOrEmpty(line))
+            {
+                return;
+            }
+
+            lock (output)
+            {
+                output.Add(line);
+            }
+
+            logLine?.Invoke(line);
         }
     }
 }
